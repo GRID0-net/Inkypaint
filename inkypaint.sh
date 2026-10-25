@@ -10,6 +10,7 @@
 #   ./inkypaint.sh prepare    extract the base game with the 11.3.0 update, then recompile it
 #   ./inkypaint.sh run [secs] [--KEY=VALUE...]  run the game (default: until you close it), screenshot at the end
 #   ./inkypaint.sh perf [secs] [--KEY=VALUE...] a measured run: frame rate, GPU time, memory, threads, call stacks
+#   ./inkypaint.sh diag [secs]  three measured runs that narrow down the rendering bugs (about 6 minutes)
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
 # Everything the game is made of stays in this folder: local/ (extraction, the recompiled game, its saves and logs)
@@ -172,7 +173,7 @@ do_perf() {
     local mvk; mvk=$(mvk_dylib)
     say "measured run for $secs s into logs/$(basename "$out") (settings: ${*:-none}; $(env | grep '^MVK_' | tr '\n' ' '))"
     { echo "settings: ${*:-none}"; env | grep '^MVK_' || echo "MVK: defaults"; } > "$out/settings.txt"
-    ( cd "$GAME_DIR" && SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 \
+    ( cd "$GAME_DIR" && SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL="${MVK_CONFIG_LOG_LEVEL:-2}" \
         "./$GAME_ID" --seconds="$secs" --vk_gpu_profile=1 --shot="$out/last" "$@" ) > "$out/console.txt" 2>&1 &
     local game=$!
     sleep 3
@@ -203,6 +204,18 @@ do_perf() {
     return $rc
 }
 
+# The rendering bugs (invisible limbs, missing eye colour): the same scene three ways, each a measured run whose
+# last frame and log land in its own logs/perf-<time>/, to tell a macro, a MoltenVK setting or the translation apart
+do_diag() {
+    local secs=${1:-95}
+    say "diag 1/3: GPU macros checked against the interpreter (mme_verify), MoltenVK logging its setup"
+    MVK_CONFIG_LOG_LEVEL=3 do_perf "$secs" --mme_verify=1 || return 1
+    say "diag 2/3: every GPU macro interpreted (no native or compiled macros)"
+    do_perf "$secs" --mme_hle=0 --mme_jit=0 || return 1
+    say "diag 3/3: MoltenVK without Metal argument buffers"
+    MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 do_perf "$secs" || return 1
+}
+
 cmd=${1:-help}; shift || true
 case "$cmd" in
     doctor) logged doctor do_doctor ;;
@@ -211,6 +224,7 @@ case "$cmd" in
     prepare) logged prepare do_prepare ;;
     run) logged run do_run "$@" ;;
     perf) logged perf do_perf "$@" ;;
+    diag) logged diag do_diag "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
-    *) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
