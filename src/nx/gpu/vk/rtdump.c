@@ -16,7 +16,14 @@
 
 #define RTD_MAX   192 /* pictures a frame */
 #define RTD_PROGS 8   /* programs listed for a pass */
+#define RTD_TEXS  24  /* textures listed for a pass */
 
+typedef struct {
+    const Surf *found, *bound;
+    int stage, slot;
+    u32 crop_gen, found_wgen;
+    int took_drawn;
+} RtdTex;
 typedef struct {
     VkImage img;
     VmaAllocation img_mem;
@@ -40,6 +47,10 @@ static struct {
     u32 draws;
     u64 vs[RTD_PROGS], fs[RTD_PROGS];
     u32 nprog;
+    /* the textures the draws of the pass sampled, and those bound for the next draw: its setup comes before the
+       pass it is drawn in begins */
+    RtdTex tex[RTD_TEXS], next[RTD_TEXS];
+    u32 ntex, nnext;
     FILE* index;
 } g_rtd = {.on = -1};
 
@@ -54,14 +65,31 @@ static int rtd_on(void) {
     return g_rtd.on && !g_rtd.done && g_vk_present == g_rtd.at;
 }
 
+static void tex_add(RtdTex* list, u32* n, const RtdTex* t);
 void vk_rtdump_draw(u64 vs, u64 fs) {
     if (!rtd_on()) return;
     g_rtd.draws++;
+    for (u32 i = 0; i < g_rtd.nnext; i++) tex_add(g_rtd.tex, &g_rtd.ntex, &g_rtd.next[i]);
+    g_rtd.nnext = 0;
     for (u32 i = 0; i < g_rtd.nprog; i++)
         if (g_rtd.vs[i] == vs && g_rtd.fs[i] == fs) return;
     if (g_rtd.nprog == RTD_PROGS) return;
     g_rtd.vs[g_rtd.nprog] = vs;
     g_rtd.fs[g_rtd.nprog++] = fs;
+}
+
+static void tex_add(RtdTex* list, u32* n, const RtdTex* t) {
+    for (u32 i = 0; i < *n; i++)
+        if (list[i].found == t->found && list[i].bound == t->bound && list[i].stage == t->stage &&
+            list[i].slot == t->slot)
+            return;
+    if (*n < RTD_TEXS) list[(*n)++] = *t;
+}
+void vk_rtdump_tex(int stage, int slot, const Surf* found, const Surf* bound) {
+    if (!rtd_on()) return;
+    RtdTex t = {found, bound, stage, slot, bound ? bound->crop_gen : 0, found ? found->wgen : 0,
+                bound ? bound->took_drawn : 0};
+    tex_add(g_rtd.next, &g_rtd.nnext, &t);
 }
 
 static int blittable(VkFormat f) {
@@ -148,11 +176,31 @@ void vk_rtdump_pass_end(Surf* const* rt, u32 n, const Surf* zt) {
             fprintf(g_rtd.index, "%s vs %016llx fs %016llx", i ? "," : "; programs", (unsigned long long)g_rtd.vs[i],
                     (unsigned long long)g_rtd.fs[i]);
         fprintf(g_rtd.index, "\n");
+        /* what the pass's draws sampled: a texture's address, size and format, whether it is a render target itself
+           (rt), a copy of one (copy, with the target's generation it was taken at), or a texture whose texels
+           were copied from targets (took), and the generations that say whether it is current */
+        for (u32 i = 0; i < g_rtd.ntex; i++) {
+            const Surf *f = g_rtd.tex[i].found, *b = g_rtd.tex[i].bound;
+            fprintf(g_rtd.index, "  stage %d slot %d: ", g_rtd.tex[i].stage, g_rtd.tex[i].slot);
+            if (!f) {
+                fprintf(g_rtd.index, "no texture\n");
+                continue;
+            }
+            fprintf(g_rtd.index, "%llx %ux%u format %u%s wgen %u", (unsigned long long)f->gva, f->w, f->h,
+                    (u32)f->f.vk, f->is_rt ? " rt" : "", g_rtd.tex[i].found_wgen);
+            if (!b)
+                fprintf(g_rtd.index, ", bound the null texture");
+            else if (b != f)
+                fprintf(g_rtd.index, ", bound a copy %ux%u taken at wgen %u", b->w, b->h, g_rtd.tex[i].crop_gen);
+            if (b && g_rtd.tex[i].took_drawn) fprintf(g_rtd.index, ", took drawn texels");
+            fprintf(g_rtd.index, "\n");
+        }
     }
     for (u32 i = 0; i < n; i++) rtd_take(rt[i], i);
     g_rtd.pass++;
     g_rtd.draws = 0;
     g_rtd.nprog = 0;
+    g_rtd.ntex = 0;
 }
 
 static float half_float(u16 h) {
