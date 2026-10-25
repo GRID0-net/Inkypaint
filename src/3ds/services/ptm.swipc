@@ -1,6 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the ScarletNX contributors
-interface snx::ctr::ptm is ptm:sysm {
-    [0x40a] CheckNew3DS() -> u32 is_new;
-    [0x818] ConfigureNew3DSCPU(u32 configuration);
-}

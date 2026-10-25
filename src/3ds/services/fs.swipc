@@ -1,7 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the ScarletNX contributors
-interface snx::ctr::fs_wire is fs:USER {
-    [0x801] Initialize(pid process);
-    [0x861] InitializeWithSdkVersion(u32 version, pid process);
-    [0x80e] CloseArchive(u64 archive);
-}

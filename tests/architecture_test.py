@@ -44,57 +44,30 @@ class ArchitectureTests(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             self.assertIn('common includes nx', errors[0])
 
-    def test_3ds_cannot_include_nx(self):
-        with tempfile.TemporaryDirectory(prefix='snx-arch-test-') as temporary:
-            root = Path(temporary)
-            for owner in architecture.BOUNDARIES:
-                (root / 'src' / owner).mkdir(parents=True)
-            (root / 'src/nx/horizon.h').write_text('/* private */\n', encoding='ascii')
-            (root / 'src/3ds/board.c').write_text('#include "../nx/horizon.h"\n', encoding='ascii')
-            errors = architecture.check_sources(root)
-            self.assertEqual(len(errors), 1)
-            self.assertIn('3ds includes nx', errors[0])
-
-    def test_3ds_cannot_link_nx_indirectly(self):
+    def test_common_cannot_link_nx_indirectly(self):
         with tempfile.TemporaryDirectory(prefix='snx-arch-test-') as temporary:
             graph = Path(temporary) / 'targets.dot'
             graph.write_text(
-                'digraph {\n"a" [label = "scarletnx-common"];\n'
-                '"b" [label = "scarletnx-3ds"];\n"c" [label = "adapter"];\n'
+                'digraph {\n"a" [label = "scarletnx-common"];\n"c" [label = "adapter"];\n'
                 '"d" [label = "scarletnx-nx"];\n'
-                '"b" -> "a";\n"b" -> "c";\n"c" -> "d";\n}\n',
+                '"a" -> "c";\n"c" -> "d";\n}\n',
                 encoding='ascii',
             )
             errors = architecture.check_graph(graph)
-            self.assertEqual(errors, ['scarletnx-3ds transitively links forbidden target scarletnx-nx'])
-
-    def test_ctr_cpu_cannot_link_legacy_compiler_runner(self):
-        with tempfile.TemporaryDirectory(prefix='snx-arch-test-') as temporary:
-            graph = Path(temporary) / 'targets.dot'
-            graph.write_text(
-                'digraph {\n"a" [label = "scarletnx-common"];\n'
-                '"b" [label = "snx_ctr_cpu"];\n"c" [label = "adapter"];\n'
-                '"d" [label = "snx_arm_llvm"];\n'
-                '"b" -> "c";\n"c" -> "d";\n}\n',
-                encoding='ascii',
-            )
-            self.assertEqual(
-                architecture.check_graph(graph), ['snx_ctr_cpu transitively links forbidden target snx_arm_llvm']
-            )
+            self.assertEqual(errors, ['scarletnx-common transitively links forbidden target scarletnx-nx'])
 
     def test_transitive_graphics_link_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix='snx-arch-test-') as temporary:
             graph = Path(temporary) / 'targets.dot'
             graph.write_text(
                 'digraph {\n"a" [label = "scarletnx-common", shape = octagon];\n'
-                '"b" [label = "scarletnx-gnuabi", shape = octagon];\n'
                 '"c" [label = "adapter", shape = octagon];\n'
                 '"d" [label = "snx_gpu", shape = octagon];\n'
-                '"b" -> "a";\n"b" -> "c";\n"c" -> "d";\n}\n',
+                '"a" -> "c";\n"c" -> "d";\n}\n',
                 encoding='ascii',
             )
             errors = architecture.check_graph(graph)
-            self.assertEqual(errors, ['scarletnx-gnuabi transitively links graphics/media target snx_gpu'])
+            self.assertEqual(errors, ['scarletnx-common transitively links graphics/media target snx_gpu'])
 
     def test_project_header_named_like_a_system_one_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix='snx-arch-test-') as temporary:

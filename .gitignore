@@ -84,3 +84,13 @@ __pycache__/
 .claude/worktrees/
 
 edenprobe-run/
+
+# inkypaint: the project folder is the checkout, so the user's own dump and keys sit beside it. Neither ever goes in git
+/the rom/
+/decryption keys/
+# everything inkypaint.sh makes: extractions, the recompiled game, the data folder, downloaded tools, logs
+/local/
+/logs/
+/.dlcache/
+/dlcache.tar
+.DS_Store

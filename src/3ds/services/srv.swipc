@@ -1,8 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the ScarletNX contributors
-# CTR word-ordered commands, not Switch HIPC/CMIF.
-interface snx::ctr::srv is srv: {
-    [1] RegisterClient(pid process);
-    [2] EnableNotification() -> handle<copy> semaphore;
-    [5] GetServiceHandle(bytes<8> name, u32 length, u32 flags) -> handle<move, session> session;
-}

@@ -4,6 +4,7 @@
    NSP, the ExeFS and RomFS written straight into the output. Nothing hactool prints reaches the console but its last
    error, keys left out */
 #include "nx/runtime/driver/extract.h"
+#include "nx/runtime/driver/inkypaint.h"
 #include "nx/runtime/driver/container.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -343,7 +344,11 @@ static int extract_files(ExtractState* state, const ExtractOptions* options, con
     if (!program->found && patch->found)
         return snx_error("%s is an update, which goes over its game: give the game's dump, with this one as --update",
                          state->base);
-    if (!program->found) return extract_aoc(state);
+    if (!program->found) { /* a DLC alone (Side Order's), over an extraction made before */
+        if (state->dump.game != INKYPAINT_TITLE_ID && !inkypaint_any_title()) return snx_error("this DLC is not Splatoon 3's");
+        return extract_aoc(state);
+    }
+    if (inkypaint_check_dump(&state->dump)) return 1; /* Splatoon 3 with its 11.3.0 update, nothing else */
     if (state->dump.aoc.found && extract_aoc(state)) return 1;
     /* the keys each NCA picked needs, said before anything is written */
     if (snx_nca_keys(program, "The game's Program NCA") ||

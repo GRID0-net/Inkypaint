@@ -1,6 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the ScarletNX contributors
-interface test::ctr {
-    [16] RoundTrip(u32 tag, u64 value, bytes<8> name, pid process) -> (u64 echoed, bytes<8> copy, u32 identity);
-    [17] Owned(u32 outcome) -> handle<copy> object;
-}

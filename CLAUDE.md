@@ -1,11 +1,24 @@
-# ScarletNX
+# inkypaint (a ScarletNX fork)
 
-ScarletNX is a Linux-first static recompiler for Switch games: ARM64 code is translated to LLVM
-IR and compiled into a game module (`recompiled/<id>/<id>_code.so`, by title ID), and the runtime
+inkypaint is a static recompilation port of Splatoon 3, one build of it: the base game `0100C2500FC20000` with the
+11.3.0 update (`v2752512`). It is a fork of ScarletNX, a Linux-first static recompiler for Switch games: ARM64 code is
+translated to LLVM IR and compiled into a game module (`recompiled/<id>/<id>_code.so`, by title ID), and the runtime
 in `src/nx/` emulates the OS (kernel, IPC, services) and the GPU (Maxwell command buffers and shaders, drawn with
-Vulkan). A change is checked against the games it affects. `README.md` has setup and commands, `docs/ROADMAP.md`
-the plan and current state, `docs/ARCHITECTURE.md` how the parts fit together. This file holds the rules sessions
-get wrong and points to the skills that carry the procedures.
+Vulkan). The first target is macOS on Apple silicon (MoltenVK), then Windows and Linux. `README.md` has setup,
+`ROADMAP-INKYPAINT.md` inkypaint's plan, `docs/ROADMAP.md` upstream's, `docs/ARCHITECTURE.md` how the parts fit.
+This file holds the rules sessions get wrong and points to the skills that carry the procedures.
+
+## inkypaint specifics
+
+- The 3DS, Vita, GBA and Linux ABI drivers are gone. `upstream` is ScarletNX (`git fetch upstream && git merge
+  upstream/main`): keep changes to shared runtime files small and local so merges stay easy, and put inkypaint's own
+  code in files of its own (`src/nx/runtime/driver/inkypaint.c`).
+- The Splatoon-only gate lives in the driver (`inkypaint.c`). Runtime fixes still follow "find the mechanism":
+  a fix explains what the game expects, even though only one game runs. Tests set `INKYPAINT_ANY_TITLE=1`.
+- The user's Mac has 8 GB of memory. Recompiles run with few jobs (`inkypaint.sh`, `INKY_JOBS`).
+- Commit messages may name Splatoon 3: it is the only game.
+- On the Mac the checkout is the project folder, beside `the rom/` and `decryption keys/` (both in `.gitignore`).
+  `inkypaint.sh` keeps the extraction, the recompiled game and its logs in `local/`, step logs in `logs/`.
 
 ## Rules
 
@@ -17,8 +30,7 @@ get wrong and points to the skills that carry the procedures.
   it affects, and the commit says what was run. A change meant to fix a crash is run enough times to show the crash
   is gone. A single passing run is insufficient for an intermittent crash.
 - **Find the mechanism.** A fix explains why the game does what it does: what the game or SDK code expects
-  (`tools/disasm.py`), and what the runtime gave it instead. No timing tweaks, retries or special cases for a
-  title ID. Syncpoints above 127 "worked" for a whole session while overwriting the game's heap.
+  (`tools/disasm.py`), and what the runtime gave it instead. No timing tweaks or retries. Syncpoints above 127 "worked" for a whole session while overwriting the game's heap.
 - **Licensing.** ScarletNX is GPL-3.0-or-later (`LICENSE`). A new file starts with
   `SPDX-License-Identifier: GPL-3.0-or-later` and the project's copyright line. Code under GPL-3.0,
   GPL-2.0-or-later (yuzu, suyu, sudachi, Citron, Eden), LGPL, MIT, BSD, ISC, zlib or Apache 2.0 can be ported,
@@ -86,11 +98,11 @@ silently. Bumping `SNX_ABI` makes the runtime refuse every module built before i
 | Generated-code ABI | `src/common/cpu/aarch64/`: `cpu.h` (with `SNX_ABI`), `cpu_helpers.c` (compiled into each game module, with the topic files it includes from `helpers/`: `fp.c`, `fp_arithmetic.c`, `integer.c`, `crypto.c`, `vector.c`) |
 | The recompiler as a library (`docs/LIBRARY.md`, #171) | `src/common/cpu/recompiler/snx_recompiler.h` (the interface), `library.c` (code in memory through the LLVM backend and `llvm/link.c`, a small descriptor instead of the NX `SnxModule`, loaded from memory), `CMakeLists.txt` (`scarletnx-recompiler`, one archive of the backend's objects, installed with a CMake package), `tests/recompiler_library.c` |
 | 32-bit games (A32/Thumb) | `src/common/cpu/arm/` (the block compiler, `README.md`; `rt_helpers.c`, what blocks leave to the backend), `src/nx/loader/module_arm.c` (block discovery, the `SnxArmModule`), `src/nx/runtime/arm.c` (thread loop, block tables, run-time compiles and hints, the NX `SnxArmRt`), `snx_svc32` in `hle/svc/svc.c` (the 32-bit SVC registers, generated from `hos.svc`), `mem_layout32` in `memory/mem.c`; `tests/nx_arm32_smoke.py` runs a synthetic one |
-| Startup | `src/nx/runtime/`: `main.c` (startup, loading the game module, the shader loading screen before the game's first thread: `prepare_wait`), `options.c` (the .ini), `settings.txt` (every setting, the game's, the launcher's and the recompiler's: `tools/settingsgen` generates `snx_settings.h`, `struct Settings` and `g_settings`, member names from the settings' names, and their tables, with LLVM's passes and options filled in from the LLVM built against; `cmake/settings.cmake`), `ini.c` (reading and writing a table's settings), `clock.c` (guest time), `rtapi.c` (what the game module calls), `crash.c`, `present.c` (vi's present and the frame pacing), `loader.c` (with `loader_segments`, the executables' segments for the shader pass), `entry.c`, `startup.c` (switches parsed before loading), `gdbstub.c`, `guest_jit.c` (the runtime JIT's NX side); `src/multicall/main.c`: scarletnx's main on Linux and macOS, where `scarletnx-3ds` and `scarletnx-gnuabi` are links to it (`SNX_MULTICALL`) |
+| Startup | `src/nx/runtime/`: `main.c` (startup, loading the game module, the shader loading screen before the game's first thread: `prepare_wait`), `options.c` (the .ini), `settings.txt` (every setting, the game's, the launcher's and the recompiler's: `tools/settingsgen` generates `snx_settings.h`, `struct Settings` and `g_settings`, member names from the settings' names, and their tables, with LLVM's passes and options filled in from the LLVM built against; `cmake/settings.cmake`), `ini.c` (reading and writing a table's settings), `clock.c` (guest time), `rtapi.c` (what the game module calls), `crash.c`, `present.c` (vi's present and the frame pacing), `loader.c` (with `loader_segments`, the executables' segments for the shader pass), `entry.c`, `startup.c` (switches parsed before loading), `gdbstub.c`, `guest_jit.c` (the runtime JIT's NX side) |
 | Kernel and memory | `src/nx/hle/kernel/`: `kernel.c` (handles, waits, events), `thread.c` (threads, the per-core lock), `sync.c` (mutexes, condition variables, address arbitration, WaitSynchronization), `debug.c` (backtraces, dumps), `ipc.c` (HIPC/CMIF parsing and replies, sessions, domains, the service registry); `src/nx/hle/svc/`: `svc.c` (the SVC handlers, `svc_<Name>`), `hos.svc` (Eden's SVC declarations: `tools/svcgen` generates each SVC's registers in both ABIs and the tables by number, which the NX modules call through `RtAPI.svcs`), `svc_mem.c` (memory SVCs, GetInfo); `src/nx/memory/mem.c`, `own.c` (guest memory the GPU owns, trapped until the CPU touches it: `docs/GPU_OWNERSHIP.md`) |
 | IPC interfaces | Every service interface is declared in a `.swipc` file beside its C file (SwIPC's language, `docs/IPC.md`). `tools/swipc/swipc.c` (C99) generates the dispatchers into the build folder (`snx_swipc` in `cmake/swipc.cmake`, the list in `src/nx/CMakeLists.txt`). A service's C file includes its generated `.swipc.inc` and defines one static handler per command that isn't a `@stub`, `nn_ns_IFoo_Command(SvcObj* self, args..., outs...)`. A new command goes in the `.swipc` file first |
 | Services | `src/nx/hle/services/`: one file per service family (`sm.c`, `am.c`, `set.c`, `time.c`, `acc.c`, `audio.c` (hwopus decodes with FFmpeg), `misc.c` for the small ones, `services.c` registers them), `audren.c` (the audio renderer's update), `pl.c` (shared fonts), `hid.c`, `vi.c`, `ldr.c`, `network/` (bsd, nifm, dns), `nvdrv.c` (nvhost devices, syncpoints); `src/nx/hle/filesystem/` (`fs.c`, `fs_tree.c`) |
-| GPU | `src/nx/gpu/`: `gpu.c` (GPFIFO, the GPU thread), `maxwell/` (`engines.c` 3D engine methods, `mme.c` macros, `compute.c`, `fermi2d.c`, `dma.c` (both hand their copies to the renderer; their CPU references, which the tests hold the GPU to, are `tests/support/fermi2d_ref.c` and `dma_ref.c`), `maxwell3d.c`, `write_pages.c`: the last GPU-side write to each page), `renderer.h` (the `Renderer` table for Vulkan, `g_renderer`), `renderer.c` (shared renderer state), `shader/` (Maxwell to SPIR-V: `shader.c` handles program hashing and flow, `decode.c` the decoder, its matcher generated from `maxwell_opcodes.def` by `tools/shaderdec`, `spirv_translate.c` and `spirv_compute.c` emit stages through `src/common/utilities/spirv_emit.c` (the SPIR-V writer the 3DS's `vsgen.c` and `fsgen.c` share), `corpus.c` records shaders, `shipped.c` finds the programs a game ships in its files and executables), `shipped_pass.c` (the walk over those files and executables that hands each program to the renderer), `texture/` (`depth.c`: packed depth/stencil texels; `blocklinear.comp` deswizzles and swizzles on the GPU, `texconv.comp` converts formats the host can't take, `docs/BLOCKLINEAR.md`), `nvn_trace.c` (`nvn_trace`: the NVN functions a game resolves and calls); `tests/support/nvn_control.c` and `nvn_command_gap.c` decode NVN's macro calls and Maxwell methods' write effects, built into their tests (`docs/NVN_HLE.md`) |
+| GPU | `src/nx/gpu/`: `gpu.c` (GPFIFO, the GPU thread), `maxwell/` (`engines.c` 3D engine methods, `mme.c` macros, `compute.c`, `fermi2d.c`, `dma.c` (both hand their copies to the renderer; their CPU references, which the tests hold the GPU to, are `tests/support/fermi2d_ref.c` and `dma_ref.c`), `maxwell3d.c`, `write_pages.c`: the last GPU-side write to each page), `renderer.h` (the `Renderer` table for Vulkan, `g_renderer`), `renderer.c` (shared renderer state), `shader/` (Maxwell to SPIR-V: `shader.c` handles program hashing and flow, `decode.c` the decoder, its matcher generated from `maxwell_opcodes.def` by `tools/shaderdec`, `spirv_translate.c` and `spirv_compute.c` emit stages through `src/common/utilities/spirv_emit.c`, `corpus.c` records shaders, `shipped.c` finds the programs a game ships in its files and executables), `shipped_pass.c` (the walk over those files and executables that hands each program to the renderer), `texture/` (`depth.c`: packed depth/stencil texels; `blocklinear.comp` deswizzles and swizzles on the GPU, `texconv.comp` converts formats the host can't take, `docs/BLOCKLINEAR.md`), `nvn_trace.c` (`nvn_trace`: the NVN functions a game resolves and calls); `tests/support/nvn_control.c` and `nvn_command_gap.c` decode NVN's macro calls and Maxwell methods' write effects, built into their tests (`docs/NVN_HLE.md`) |
 | Vulkan renderer | `src/nx/gpu/vk/`: `vk.h` (lists the parts), `device.c` (instance, device, queues, swapchain, VMA), `cmd.c` (frames in flight, staging), `surface.c` and `format.c` (render targets, formats), `texture.c` (textures, samplers), `astc.c` (ASTC compute uploads), `blocklinear.c` and `texconv.c` (the GPU's deswizzles, swizzles and format conversions), `buffer.c` (guest memory as buffers), `pipeline.c` (shader modules, pipelines, the shaders kept across runs and those the game ships), `pipeline_file.c` (the files they are kept in, `.vkshaders` and `.vkshipped`), `render.c` (rendering passes, clears, draws), `compute.c` (compute on the compute queue, results landing in guest memory), `owned.c` (results kept on the GPU, published over guest memory, landed when the CPU touches it), `dma.c`, `blit.c`, `nvdec.c` and `vic.c` (the DMA engine, the 2D engine's blits from memory, NVDEC pictures, with Vulkan Video under the experimental `vulkan_video` setting, and VIC, all on the GPU), `renderer.c` (its side of the renderer interface, presenting), `vma.cpp` (VMA's implementation); Vulkan-Headers, volk and VMA are CPM packages (`cmake/dependencies.cmake`) |
 | Shader corpus | `--shader_corpus=dir` (the `[Debug]` setting `shader_corpus`) records each translated shader; `build/snx-shaderc dir --validate` translates it directly to SPIR-V and validates it with `spirv-val`, which must be on PATH (`--out DIR` from two builds, diffed, shows a translator change kept the output) |
 | Video | `src/nx/gpu/video/`: `host1x.c` (IOVA, ioctls, a channel per nvdrv NVDEC or VIC fd, each NVDEC one with its own decoder), `nvdec.c` (H.264 and VP9 with FFmpeg's libavcodec, the picture laid out in the surface its job names on the GPU), `vic.c` (the jobs VIC composes on the GPU, `vic_compose.glsl`); their CPU references for the tests are `tests/support/nvdec_ref.c` and `vic_ref.c` |
@@ -132,13 +144,13 @@ whether the agent may build and run: only one at a time can):
 
 ## Git
 
-- `origin` is `git@github.com:scarletnx/ScarletNX.git` (public). Push only when asked. Never force-push a
-  pushed branch.
+- `upstream` is `https://github.com/scarletnx/ScarletNX` (public). inkypaint has no `origin` yet. Push only when
+  asked. Never force-push a pushed branch.
 - Commit subjects use a bracketed area prefix (for example, `[gpu]` or `[build]`) followed by an imperative sentence.
   The body says why, and how it was verified. Check
   every claim in the message against the staged diff.
-- Commit messages, like comments, docs and test data, say what a game did, not which game it was: "one game's menus",
-  "another's save load", "a player's log". A title ID is no better than a name.
+- In files shared with upstream, comments and docs say what a game did, not which game it was, so they merge
+  cleanly. inkypaint's own files and commit messages may name Splatoon 3.
 - Stage files by name, and check `git diff --cached --stat` right before committing: a commit takes everything
   staged, including a `git mv` or `git rm` from earlier in the session. Commits end with the `Co-Authored-By` line
   the session's instructions give.

@@ -11,7 +11,6 @@ if(Python3_Interpreter_FOUND) # tests/CMakeLists.txt looked it up
             ${snx_architecture_sanitizers})
     set_tests_properties(runtime_architecture PROPERTIES TIMEOUT 180)
     add_test(NAME architecture_checker COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/architecture_test.py")
-    add_test(NAME gnuabi_differential_harness COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/gnuabi_diff_test.py")
     if(SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY AND SNX_TEST_VULKAN)
         add_test(NAME nx_runtime_homebrew
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/nx_runtime_smoke.py"

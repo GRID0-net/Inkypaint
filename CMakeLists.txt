@@ -48,10 +48,6 @@ set(CMAKE_CXX_EXTENSIONS ON)
 # and without extensions (C_STANDARD 99, C_EXTENSIONS OFF on those targets)
 
 option(SNX_BUILD_NX "Build the Switch Horizon/Maxwell runtime" ON)
-option(SNX_BUILD_GNUABI "Build the CPU-only Linux AArch64 runtime" ON)
-option(SNX_BUILD_3DS "Build the 3DS driver: extraction, the ARM11 AOT compiler and the runtime" ON)
-option(SNX_BUILD_VITA "Build the PS Vita driver: VPK extraction, the AArch32 AOT compiler and the runtime" ON)
-option(SNX_BUILD_AGB "Build the Game Boy Advance AGB board runtime" ON)
 # Reject stale backend selections instead of silently changing an existing build's behavior.
 if(SNX_BUILD_NX AND DEFINED SNX_BACKEND AND NOT SNX_BACKEND STREQUAL "sdl3")
     message(FATAL_ERROR "SNX_BACKEND=${SNX_BACKEND}: SDL3 is now mandatory for the NX runtime. "
@@ -97,21 +93,6 @@ if(SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY)
     set(snx_gui_default ON)
 endif()
 option(SNX_BUILD_GUI "Build the keyboard-driven SDL3 launcher" ${snx_gui_default})
-# scarletnx-3ds and scarletnx-gnuabi as names of scarletnx, links beside it as scarletnx-switch is (src/multicall): one
-# program carries LLVM, SDL and the code the drivers share once. A zip keeps no links, so Windows has three programs,
-# and Android's and iOS's apps start their drivers their own way
-set(snx_multicall_default OFF)
-if(SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY AND (SNX_BUILD_3DS OR SNX_BUILD_GNUABI OR SNX_BUILD_VITA) AND NOT WIN32 AND
-   NOT ANDROID AND
-   NOT IOS)
-    set(snx_multicall_default ON)
-endif()
-option(SNX_MULTICALL "Make scarletnx-3ds, scarletnx-vita and scarletnx-gnuabi names of scarletnx" ${snx_multicall_default})
-if(SNX_MULTICALL AND (NOT SNX_BUILD_NX OR SNX_TOOLS_ONLY OR WIN32 OR ANDROID OR IOS))
-    message(FATAL_ERROR "SNX_MULTICALL makes names of the runtime's program, scarletnx, which a build without the "
-                        "Switch runtime (SNX_BUILD_NX, SNX_TOOLS_ONLY) doesn't have, Windows has no links for, and "
-                        "Android's and iOS's apps don't start by name")
-endif()
 if(SNX_BUILD_GUI AND SNX_TOOLS_ONLY)
     message(FATAL_ERROR "SNX_BUILD_GUI requires a runtime build, not a tools-only build")
 endif()
@@ -137,18 +118,6 @@ if(SNX_TRACY AND SNX_DEPLOY)
     message(STATUS "SNX_TRACY: no post-build deploy of the profiling runtime (a run of the profiled driver still puts "
                    "it beside its game)")
 endif()
-# The client makes dlclose a no-op on Linux (a library unload would leave its symbols stale in the profiler), and the
-# 3DS driver unloads the AOT module it recompiled before loading the new one. So the profiled build keeps the drivers
-# as their own programs instead of names of scarletnx, and only scarletnx has the client.
-if(SNX_TRACY AND SNX_MULTICALL)
-    set(SNX_MULTICALL OFF)
-    foreach(name scarletnx-3ds scarletnx-vita scarletnx-gnuabi)
-        if(IS_SYMLINK "${CMAKE_BINARY_DIR}/${name}")
-            file(REMOVE "${CMAKE_BINARY_DIR}/${name}") # a link of an earlier configure would be written through
-        endif()
-    endforeach()
-    message(STATUS "SNX_TRACY: the drivers are their own programs (the client makes dlclose a no-op on Linux)")
-endif()
 # Before the dependencies: the tests' network fixtures link ENet and zstd, whatever the build
 include(CTest)
 # Before the sources: the C99 driver of a tools-only build links LZ4 too
@@ -163,15 +132,6 @@ if(SNX_BUILD_NX)
     add_subdirectory(src/nx/runtime/driver host-tools)
 endif()
 include(cmake/build_info.cmake) # the window titles' line; the driver stamps games with its commit
-if(SNX_BUILD_3DS)
-    # the window's icon, as the Switch runtime's: made here, as the folder including it first owns snx_window_icon,
-    # and a target of src/3ds compiles only src/3ds (tests/architecture.py)
-    include(cmake/window_icon.cmake)
-    add_subdirectory(src/3ds)
-endif()
-if(SNX_BUILD_VITA AND NOT SNX_TOOLS_ONLY)
-    add_subdirectory(src/vita)
-endif()
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
@@ -181,19 +141,8 @@ if(SNX_TOOLS_ONLY AND SNX_BUILD_NX)
     install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/scarletnx)
     return()
 endif()
-if(SNX_BUILD_GNUABI)
-    add_subdirectory(src/gnuabi)
-endif()
-if(SNX_BUILD_AGB)
-    # the runner's window icon, made here as the 3DS's is: a target of src/agb compiles only src/agb
-    include(cmake/window_icon.cmake)
-    add_subdirectory(src/agb)
-endif()
 if(SNX_BUILD_GUI)
     add_subdirectory(src/gui)
-endif()
-if(SNX_MULTICALL) # after the drivers whose libraries it links
-    add_subdirectory(src/multicall)
 endif()
 # The icon both programs' desktop entries name, in every size (scripts/make-icons.py); Windows has it in the executables
 if(NOT WIN32)
@@ -204,15 +153,6 @@ endif()
 if(NOT SNX_BUILD_NX)
     include(GNUInstallDirs)
     install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/scarletnx)
-    # the Linux runtime alone (a big-endian host's build): its desktop entry, for the AppImage made of it
-    # (scripts/make-appimage.sh), and the license of OpenSSL, which it links
-    if(SNX_BUILD_GNUABI AND NOT SNX_BUILD_3DS)
-        if(NOT WIN32)
-            install(FILES dist/scarletnx-gnuabi.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
-                    COMPONENT desktop)
-        endif()
-        install(FILES "${OpenSSL_SOURCE_DIR}/LICENSE.txt" DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/scarletnx/OpenSSL)
-    endif()
     return()
 endif()
 if(BUILD_TESTING AND TARGET hactool_lib)

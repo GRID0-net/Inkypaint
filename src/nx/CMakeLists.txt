@@ -139,11 +139,6 @@ else()
         target_link_libraries(scarletnx PRIVATE scarletnx-gui)
         target_compile_definitions(scarletnx PRIVATE SNX_WITH_GUI)
     endif()
-    # also the other drivers, by its name (src/multicall), whose main it has then
-    if(SNX_MULTICALL)
-        target_link_libraries(scarletnx PRIVATE snx_multicall)
-        target_compile_definitions(scarletnx PRIVATE SNX_MULTICALL)
-    endif()
 endif()
 if(IOS)
     # the app (dist/apple): the menu and then the game it plays, in the one process an iOS app has
@@ -296,12 +291,6 @@ elseif(SNX_DEPLOY)
     # deploys them (src/3ds/CMakeLists.txt)
     set(snx_ctr_deployed "")
     set(snx_vita_deployed "")
-    if(SNX_MULTICALL AND SNX_BUILD_3DS)
-        set(snx_ctr_deployed "$<TARGET_FILE:scarletnx>")
-    endif()
-    if(SNX_MULTICALL AND TARGET snx_vita_program)
-        set(snx_vita_deployed "$<TARGET_FILE:scarletnx>")
-    endif()
     add_custom_command(TARGET scarletnx POST_BUILD
         COMMAND "${CMAKE_COMMAND}" "-DRUNTIME=$<TARGET_FILE:scarletnx>" "-DCTR_RUNTIME=${snx_ctr_deployed}"
                 "-DVITA_RUNTIME=${snx_vita_deployed}"
@@ -319,16 +308,6 @@ if(WIN32)
     install(PROGRAMS "${CMAKE_BINARY_DIR}/scarletnx-switch.exe" DESTINATION bin)
 elseif(NOT ANDROID AND NOT IOS)
     set(snx_names scarletnx-switch)
-    # the other drivers, which it is too (SNX_MULTICALL, src/multicall), by the names they have as programs of their own
-    if(SNX_MULTICALL AND TARGET snx_ctr_program)
-        list(APPEND snx_names scarletnx-3ds)
-    endif()
-    if(SNX_MULTICALL AND TARGET snx_gnuabi_program)
-        list(APPEND snx_names scarletnx-gnuabi)
-    endif()
-    if(SNX_MULTICALL AND TARGET snx_vita_program)
-        list(APPEND snx_names scarletnx-vita)
-    endif()
     foreach(name IN LISTS snx_names)
         # in place of the program of that name an older build made in this folder
         add_custom_command(TARGET scarletnx POST_BUILD

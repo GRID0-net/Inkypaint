@@ -1,7 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright 2026 the ScarletNX contributors
-# Read (0x802) uses a separately checked CTR mapped output buffer.
-interface snx::ctr::file_wire {
-    [0x804] GetSize() -> u64 size;
-    [0x808] Close();
-}

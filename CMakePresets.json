@@ -186,8 +186,7 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
-        "CMAKE_Swift_COMPILER_TARGET": "arm64-apple-macos13.0",
-        "SNX_BUILD_GNUABI": "OFF"
+        "CMAKE_Swift_COMPILER_TARGET": "arm64-apple-macos13.0"
       }
     },
     {
@@ -206,10 +205,6 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_DISABLE_FIND_PACKAGE_SDL3": "ON",
         "SNX_DEPLOY": "OFF",
-        "SNX_BUILD_GNUABI": "OFF",
-        "SNX_BUILD_3DS": "OFF",
-        "SNX_BUILD_VITA": "OFF",
-        "SNX_BUILD_AGB": "OFF",
         "BUILD_TESTING": "OFF"
       }
     },

@@ -1,127 +1,58 @@
-# ScarletNX
-<p align="center">
-  <img src="./dist/wimsy.svg" alt="Wimsy, the mascot" width="200"><br>
-  <b>Wimsy, the ScarletNX mascot</b>
-</p>
+# inkypaint
 
-Discord: https://discord.gg/tRTRXXbyjp (my god why don't we just use IRC like good people?)
+A static recompilation PC port of **Splatoon 3**, built on [ScarletNX](https://github.com/scarletnx/ScarletNX)'s ARM64
+recompiler and Switch runtime. inkypaint supports one game and one build of it: Splatoon 3 (`0100C2500FC20000`) with
+its 11.3.0 update (`v2752512`). Everything it adds (hooks, fixes, settings, later online play) is written against that
+executable.
 
-A GPLv3 static ARM64 to x86 recompiler with a Switch, GBA and GNU/Linux ABI translation layer for Solaris, Linux, Windows, FreeBSD and Android.
+The first target is macOS on Apple silicon. Windows and Linux follow, and the code they need is still here.
 
-## Quick start
+**You need your own copy of the game and your own console's keys.** Nothing of the game is in this repository, and
+nothing extracted from it may be committed (`.gitignore` covers the usual paths).
 
-Each push to `main` that builds everywhere becomes a nightly in [scarletnx/nightly](https://github.com/scarletnx/nightly/releases), the newest 30
-kept, with each open pull request's builds. The latest:
-[ScarletNX-linux-x86_64.AppImage](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-linux-x86_64.AppImage) and
-[ScarletNX-linux-aarch64.AppImage](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-linux-aarch64.AppImage) for Linux (`chmod +x` it first;
-[ScarletNX-linux-ppc64le.AppImage](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-linux-ppc64le.AppImage),
-[ScarletNX-linux-riscv64.AppImage](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-linux-riscv64.AppImage) and
-[ScarletNX-linux-loongarch64.AppImage](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-linux-loongarch64.AppImage) are
-cross-built for [PowerPC64 LE](docs/PPC64.md), [RISC-V and LoongArch](docs/RISCV-LOONGARCH.md), when their jobs built.
-[ScarletNX-linux-ppc64.AppImage](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-linux-ppc64.AppImage), for
-[PowerPC64 BE](docs/PPC64.md#big-endian-hosts), not yet run on a big-endian machine),
-[ScarletNX-windows-x86_64.zip](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-windows-x86_64.zip) for Windows (run `bin\scarletnx.exe`)
-and [ScarletNX-android-universal.apk](https://github.com/scarletnx/nightly/releases/latest/download/ScarletNX-android-universal.apk) ([Android](docs/ANDROID.md)).
-Games need a Vulkan 1.3 driver.
+## Status
 
-Keys and games must be dumped from your own console. Started with no arguments, the program opens the
-[launcher](docs/GUI.md). **Install Keys** installs your `prod.keys`. For NSPs, also put `title.keys` in
-`~/.switch` (`%USERPROFILE%\.switch` on Windows). **Load Switch NSP/XCI/NRO** then picks a dump, extracts and
-recompiles it and starts the game, which the **Games** tab lists from then on. See [Usage](docs/USAGE.md) for the
-command line and [Folders](docs/USAGE.md#folders) for where games, saves and settings go.
+Early bring-up. ScarletNX does not run any game to its menu on macOS yet, so the first milestone is Splatoon 3 booting
+past its title screen there. See [ROADMAP-INKYPAINT.md](ROADMAP-INKYPAINT.md).
 
-The shared ARM64 recompiler lives under `src/common/`. Switch Horizon HLE
-and Maxwell graphics live under `src/nx/`. The CPU-only Linux AArch64 runtime lives
-under `src/gnuabi/` and builds without the Switch graphics or media dependencies:
+## macOS quick start
+
+Put your dumps and keys in the project folder, the way the scripts expect them:
+
+```
+inkypaint/
+  the rom/            Splatoon 3 [0100C2500FC20000][v65536][BASE].nsp
+                      Splatoon 3 11.3.0 [0100C2500FC20800][v2752512][UPD].nsp
+  decryption keys/    prod.keys, title.keys
+```
+
+Then, in Terminal:
 
 ```sh
-cmake -S . -B build/gnuabi -DSNX_BUILD_NX=OFF
-cmake --build build/gnuabi
-build/gnuabi/scarletnx-gnuabi -L /path/to/aarch64-sysroot ./test_aarch64
+./inkypaint.sh doctor     # what your Mac has; tells you what is missing
+./inkypaint.sh setup      # Homebrew packages (cmake, ninja, pkg-config, llvm) and Ryujinx's MoltenVK
+./inkypaint.sh build      # the runtime and the driver, into build/macos
+./inkypaint.sh prepare    # extract the game with the update (about 10 GB) and recompile it
+./inkypaint.sh run 120    # play for 120 seconds (no number: until you close the window)
 ```
 
-It runs static and dynamically linked programs, which start other processes, talk
-through pipes and read and write files through a sysroot, as QEMU's `-L` gives one
-(`linux/` of the data folder by default). See [Linux ABI execution and QEMU validation](docs/GNUABI.md)
-for the sysroot, the JIT and AOT modes, supported syscalls, and current limits. The NX executable is
-also installed as `scarletnx-switch`, and on Linux and macOS as `scarletnx-3ds` and `scarletnx-gnuabi`, the one
-program running the driver its name says. Game Boy Advance ROMs run under the `scarletnx-agb` system type,
-on the emulated AGB board being built under `src/agb/` (licensed under MPL-2.0), see [AGB board](docs/AGB.md).
+Each step writes `logs/<step>-<time>.log`. You need Apple's command line tools (`xcode-select --install`) and
+[Homebrew](https://brew.sh). Recompiling is memory hungry: on an 8 GB Mac it runs two compiles at a time
+(`INKY_JOBS=1 ./inkypaint.sh prepare` if macOS starts swapping hard). An interrupted `prepare` picks up where it
+stopped.
 
-The recompiler is also a library on its own, `libscarletnx-recompiler`: a program hands
-it ARM64 or AArch32 code in memory and runs the result in its own process with its own
-SVC handler, with no Switch runtime behind it. See
-[The recompiler as a library](docs/LIBRARY.md).
+## How it works
 
-Install the build tools first. On Debian/Ubuntu:
-```bash
-sudo apt update
-sudo apt install build-essential git cmake ninja-build clang llvm-dev nasm pkg-config \
-  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev \
-  libasound2-dev libpulse-dev libpipewire-0.3-dev
-```
-If your distribution provides `libsdl3-dev`, install it too. Otherwise CMake builds a pinned SDL3
-using the X11 and audio development packages above. SDL2 is not a substitute for SDL3. You also
-need a Vulkan 1.3 driver to run games. See [Build prerequisites](./docs/BUILD.md#prerequisites) for
-Wayland, other systems, and the SDL3 troubleshooting steps.
+ScarletNX translates the game's ARM64 executables to LLVM IR ahead of time and compiles them into a native module.
+Its runtime emulates the Switch's OS (kernel, IPC services, filesystem) and its GPU (Maxwell command buffers and shaders,
+drawn with Vulkan, through MoltenVK on macOS). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Then build:
-```bash
-git clone --depth=1 https://github.com/scarletnx/ScarletNX
-cd ScarletNX
-cmake --preset default -B build && cmake --build build
-```
+inkypaint keeps ScarletNX's Switch runtime and drops its 3DS, PS Vita, GBA and Linux ABI drivers. The driver refuses
+any dump that is not Splatoon 3 with the 11.3.0 update (`src/nx/runtime/driver/inkypaint.c`). `upstream` is
+ScarletNX's repository, merged from to pick up its runtime and GPU work.
 
-For encrypted dumps, put `prod.keys` (and `title.keys`, for NSPs) in `~/.switch`, or pass them with
-`--keys` and `--title-keys`. Decrypted DNSP/DXCI content needs no keys.
-```bash
-./build/scarletnx "Game.xci"  # extract, recompile, then play (also accepts NSP, DNSP and DXCI)
-```
-Run the same command again after an interruption. Completed extraction and recompilation are skipped,
-but the game always starts anew. The driver keeps games, extractions and keys in its data folder,
-`~/.local/share/scarletnx` on Linux ([Folders](./docs/USAGE.md#folders)). To run the steps separately, here in
-folders of the current one:
-```bash
-./build/scarletnx -x "Game.xci" --out work/Game     # -> work/Game/{exefs,romfs}
-./build/scarletnx -r work/Game Game --outdir games  # -> games/Game/Game
-./build/scarletnx -rx "Game.xci"                   # prepare without playing (UNIX)
-./build/scarletnx -Hs "Game.xci"                   # headless, wait for GDB (UNIX)
-cd games/Game && ./Game
-```
+## License
 
-For an SDL3 menu, run `./build/scarletnx` with no arguments. Select a driver with arrow keys and
-Enter or hover and click, then choose drag-and-drop or the paginated `games/` browser.
-The GUI shows live driver/game
-output and combined CPU/RAM usage. See [GUI launcher](docs/GUI.md).
-
-The experimental `scarletnx-3ds` driver and **Load 3DS CIA** menu entry support
-decrypted application CIA extraction (`scarletnx-3ds -x game.cia`) and an independent
-page-based memory controller. It runs the extracted titles through an experimental
-**extract -> offline AOT -> native run** pipeline on 64-bit Linux and Windows, using an
-explicit ARM11/checked-memory profile without changing shared A57 defaults.
-The homebrew SuperTux draws its title and loading screens with a software port of
-Azahar's PICA pipeline and plays its music through a port of Azahar's HLE DSP.
-It is not playable yet: there is no input, the bottom screen is not shown, and parts of the OS are missing.
-See the [3DS port](docs/3DS.md) for limits, build instructions and the parity roadmap.
-
-The experimental `scarletnx-vita` driver and **Load Vita VPK** menu entry run PS Vita homebrew VPKs through the same
-**extract -> offline AOT -> native run** pipeline, compiling code it missed at run time. It draws sceGxm's scenes
-on Vulkan with a port of Vita3K's shader translator. The Lua Vita Tester draws its screen, reads input and plays sound.
-See the [Vita driver](docs/VITA.md) for what it covers.
-
-For more detailed information please see: [Build + run](./docs/BUILD.md). For the Android app (arm64 and x86_64),
-see [Android](./docs/ANDROID.md). macOS and iOS build in CI. An iPhone prepares and runs a game by itself, and no game
-runs on macOS yet: see [macOS and iOS](./docs/APPLE.md). Every document: [docs](./docs/README.md).
-
-# Special thanks
-
-- yuzu, Suyu, Torzu, Ryujinx, [Ryubing](https://git.ryujinx.app/ryubing/ryujinx) (Ryujinx's continuation), [Citron](https://git.citron-emu.org/citron/emulator) and [Eden](https://git.eden-emu.dev/eden-emu/eden).
-- [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)
-- LibHac.
-- [NeXium](https://nexium-emu.org/) for research and development.
-- [Switchbrew](https://switchbrew.org) for research.
-- [Azahar](https://github.com/azahar-emu/azahar) and Citra, for all of the 3DS emulation.
-- [Vita3K](https://github.com/Vita3K/Vita3K), for the PS Vita's GXM and shader translation, and [vita-headers](https://github.com/vitasdk/vita-headers) for its NIDs.
-- [mGBA](https://github.com/mgba-emu/mgba) as a direct reference for the AGB board.
-
-Wimsy, the mascot and the runtime's icon (`dist/wimsy.svg`) was drawn by Liz.
+GPL-3.0-or-later, as ScarletNX (`LICENSE`). Credits for the code ported into ScarletNX are in
+[docs/CREDITS.md](docs/CREDITS.md). Splatoon is a trademark of its owner. inkypaint is not affiliated with or endorsed by
+the game's publisher.

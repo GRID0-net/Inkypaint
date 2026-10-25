@@ -2,6 +2,7 @@
    Copyright 2026 the ScarletNX contributors */
 #define _POSIX_C_SOURCE 200809L
 #include "nx/runtime/driver/recompile.h"
+#include "nx/runtime/driver/inkypaint.h"
 #include "nx/runtime/driver/container.h"
 #include "nx/runtime/driver/extract.h"
 #include "nx/runtime/driver/game_name.h"
@@ -517,6 +518,12 @@ int snx_recompile_game(int argc, char** argv, const SnxPaths* paths) {
         snx_title_text(program.npdm.title_id, other);
         snx_error("%s is an update of the game %s, and its program is %s", input, of,
                   other[0] ? other : "none with a title ID");
+        snx_free_program(&program);
+        return 1;
+    }
+    if (program.npdm.title_id != INKYPAINT_TITLE_ID && !inkypaint_any_title()) { /* inkypaint makes Splatoon 3 alone */
+        snx_error("inkypaint only recompiles Splatoon 3 (0100C2500FC20000): extract its dump with the "
+                  INKYPAINT_UPDATE_NAME " update (scarletnx -x BASE.nsp --update UPDATE.nsp) and recompile that");
         snx_free_program(&program);
         return 1;
     }

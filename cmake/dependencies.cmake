@@ -69,21 +69,12 @@ if(SNX_BUILD_NX)
     snx_quiet(snx_xxhash)
 endif()
 
-# jsmolka's gba-tests (MIT), ROMs that check the ARM7TDMI, the BIOS's open bus, the memory map, the save memory and
-# the display, each leaving the number of its first failed test in a register. The AGB board's tests run them
-# (tests/agb_gba_tests.py). Test data, not shipped
-if(SNX_BUILD_AGB AND BUILD_TESTING)
-    CPMAddPackage(NAME gba-tests VERSION 2025.04.19
-                  URL https://github.com/jsmolka/gba-tests/archive/a7113b67e63f83a9b321696ddd7042ccfad6c881.tar.gz
-                  URL_HASH SHA256=b9373ef18700c48ccab0940ec480517fba47accc86516df5fd43ed9ec6cdf082
-                  DOWNLOAD_ONLY YES)
-endif()
 
 # ENet (MIT) and zstd (BSD-3-Clause) for ldn's rooms (src/common/network/net_room.c): an Eden room is ENet on UDP,
 # and a game's datagrams in it are zstd frames. ENet's own sources, with the POSIX calls every target but Windows
 # has; zstd's compressor and decompressor alone, in C (no assembly, so every target builds the same). The tests of
 # the network services link them in a build without the runtime too
-if(SNX_BUILD_NX OR SNX_BUILD_3DS OR BUILD_TESTING)
+if(SNX_BUILD_NX OR BUILD_TESTING)
     CPMAddPackage(NAME enet VERSION 1.3.18
                   URL https://github.com/lsalzman/enet/archive/refs/tags/v1.3.18.tar.gz
                   URL_HASH SHA256=28603c895f9ed24a846478180ee72c7376b39b4bb1287b73877e5eae7d96b0dd
@@ -112,20 +103,13 @@ if(SNX_BUILD_NX OR SNX_BUILD_3DS OR BUILD_TESTING)
     snx_quiet(snx_zstd)
 endif()
 
-# the Vita driver (src/vita), which the root CMakeLists.txt adds when it is built and the build isn't tools-only: its
-# loader's OpenSSL, its renderer's Vulkan headers and volk, its movies' FFmpeg and its window's SDL3
-if(SNX_BUILD_VITA AND NOT SNX_TOOLS_ONLY)
-    set(snx_vita_runtime ON)
-else()
-    set(snx_vita_runtime OFF)
-endif()
 
 # OpenSSL for the hashes and ciphers (the NX, 3DS and Vita loaders, ldr, csrng, hactool) and the ssl service's TLS. It
 # builds with its own Configure and make, which cmake/openssl.cmake runs
 # The archives' SHA-256 are also part of their cache keys (cmake/deps_cache.cmake)
 include("${CMAKE_SOURCE_DIR}/cmake/deps_cache.cmake")
 include("${CMAKE_SOURCE_DIR}/cmake/apple.cmake")
-if(SNX_BUILD_NX OR SNX_BUILD_3DS OR SNX_BUILD_GNUABI OR snx_vita_runtime) # the GNU ABI runtime's random bytes and TLS sockets
+if(SNX_BUILD_NX)
     set(snx_openssl_sha256 325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9)
     CPMAddPackage(NAME OpenSSL VERSION 4.0.3
                   URL https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz
@@ -134,7 +118,7 @@ if(SNX_BUILD_NX OR SNX_BUILD_3DS OR SNX_BUILD_GNUABI OR snx_vita_runtime) # the 
     include("${CMAKE_SOURCE_DIR}/cmake/openssl.cmake")
 endif()
 
-if((SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY) OR SNX_BUILD_3DS OR snx_vita_runtime)
+if(SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY)
     CPMAddPackage(NAME Vulkan-Headers VERSION 1.4.365
                   URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.365.tar.gz
                   URL_HASH SHA256=ed832b3292cce324ebba6522fd2d3004bf1b797fa49bfbcad0b302ff23d56abc
@@ -144,28 +128,6 @@ if((SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY) OR SNX_BUILD_3DS OR snx_vita_runtime)
                   URL https://github.com/zeux/volk/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz
                   URL_HASH SHA256=1547d8d74395d4048fb3f4a6313da56db626e89b55db238d0d7e8944c8a645f3
                   DOWNLOAD_ONLY YES)
-    # the 3DS system archives' open stand-ins (cmake/ctr_system_archives.cmake): the RomFS images
-    # B3n30/citra_system_archives makes (GPL-2.0-or-later), as the C arrays Azahar's source holds them in, each at the
-    # commit that last changed it
-    if(SNX_BUILD_3DS)
-        CPMAddPackage(NAME AzaharMiiData VERSION 2019
-                      URL https://raw.githubusercontent.com/azahar-emu/azahar/36ae10f555f73fb4e8d05cb676583efc67ecacef/externals/open_source_archives/include/mii.app.romfs.h
-                      URL_HASH SHA256=4538bb4964ce4449732adc0bbf0faf69d7c054a0eee6d5f1dafce17bad409ad1
-                      DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
-        CPMAddPackage(NAME AzaharCountryList VERSION 2019
-                      URL https://raw.githubusercontent.com/azahar-emu/azahar/a1517612d37f17e673849e04673a0f3c146d6208/externals/open_source_archives/include/country_list.app.romfs.h
-                      URL_HASH SHA256=bd1c384c9788f99ed2cf9157727820c4c0000f6bbc01843ff8642a32e6f90651
-                      DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
-        CPMAddPackage(NAME AzaharSharedFont VERSION 2019
-                      URL https://raw.githubusercontent.com/azahar-emu/azahar/7f1303a8344724598015a3e48a4bc5aef77090fc/externals/open_source_archives/include/shared_font.app.romfs.h
-                      URL_HASH SHA256=316a05284c0746bcd1b5623c54ff770f2db736bdb90a592c2eda176e2c3ac6c1
-                      DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
-        CPMAddPackage(NAME AzaharBadWordList VERSION 2019
-                      URL https://raw.githubusercontent.com/azahar-emu/azahar/8a2c44be5688db1cea22ba7c485e8befc892e673/externals/open_source_archives/include/bad_word_list.app.romfs.h
-                      URL_HASH SHA256=fe040590fa035e2602c9ce25ba3cf6a208fcb72cb9d53945cbc5747610ad4e15
-                      DOWNLOAD_ONLY YES DOWNLOAD_NO_EXTRACT YES)
-        include("${CMAKE_SOURCE_DIR}/cmake/ctr_system_archives.cmake")
-    endif()
     # volk.c and VMA's implementation (src/nx/gpu/vk/vma.cpp) compiled into a target of ours: no warnings, and not
     # the sanitizers SNX_TEST_SANITIZERS gives our code (tests/CMakeLists.txt)
     set(snx_third_party_flags -w)
@@ -176,7 +138,7 @@ endif()
 
 # FFmpeg for the Switch runtime's NVDEC and hwopus and the Vita's movies. It builds with its own configure and make,
 # which cmake/ffmpeg.cmake runs
-if((SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY) OR snx_vita_runtime)
+if(SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY)
     set(snx_ffmpeg_sha256 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e)
     CPMAddPackage(NAME FFmpeg VERSION 9.0.2
                   URL https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
@@ -236,7 +198,7 @@ if(SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY)
 endif()
 
 set(SNX_SDL3_FROM_SOURCE OFF)
-if((SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY) OR SNX_BUILD_GUI OR SNX_BUILD_3DS OR snx_vita_runtime OR SNX_BUILD_AGB)
+if((SNX_BUILD_NX AND NOT SNX_TOOLS_ONLY) OR SNX_BUILD_GUI)
     # Prefer a compatible system package. CPM handles the pinned static fallback and user overrides. SDL_ALTIVEC only
     # changes PowerPC builds: SDL's AltiVec blitters prefetch with dstt, which the ISA phased out and qemu's POWER10
     # traps as illegal (the window icon's and the menu's software surfaces, which nothing here needs fast)
