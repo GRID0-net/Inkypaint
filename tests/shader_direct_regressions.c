@@ -38,7 +38,8 @@ static const char* xfb_path;
 static const char* passthrough_paths[6];
 static const char* structured_paths[2];
 static const char* fswzadd_path;
-static char* fixture_paths[71];
+static const char* metal_math_path;
+static char* fixture_paths[72];
 static size_t fixture_count;
 
 static const char* fixture_path(const char* directory, const char* name) {
@@ -761,6 +762,44 @@ static void precise_math(void) {
         if (code) check(count_opcode(code, words, 71, 42) >= 2, "float math has NoContraction");
         free(code);
     }
+}
+
+/* MoltenVK's way (g_shader_no_contraction 0, g_shader_fast_math_default 1): no NoContraction, and a fast-math
+   default keeping infinities and NaNs in place of SignedZeroInfNanPreserve for 32-bit floats. SPIRV-Cross writes a
+   NoContraction operation for Metal as an [[clang::optnone]] call, and MoltenVK compiles a module that preserves
+   signed zeros in Metal's Safe math mode */
+static int execution_mode_count(const u32* code, size_t words, u32 opcode, u32 mode, u32 operand) {
+    int found = 0;
+    for (size_t i = 5; i < words;) {
+        u32 width = code[i] >> 16, op = code[i] & 0xffff;
+        if (!width || i + width > words) return -1;
+        if (op == opcode && width >= 3 && code[i + 2] == mode && (operand == ~0u || (width >= 4 && code[i + 3] == operand)))
+            found++;
+        i += width;
+    }
+    return found;
+}
+static void metal_math(void) {
+    const u64 math[] = {FMUL_KEEP, FADD_KEEP, FMUL_IMM};
+    const int stages[] = {ST_FS, ST_VS, ST_CS};
+    g_shader_no_contraction = 0;
+    g_shader_fast_math_default = 1;
+    for (size_t i = 0; i < sizeof stages / sizeof *stages; i++) {
+        ShaderInfo info;
+        size_t words = 0;
+        u32* code = translate(math, 3, stages[i], &info, &words, 1);
+        check_translated(code, &info, "float math translates for MoltenVK");
+        if (code) {
+            check(count_opcode(code, words, 71, 42) == 0, "MoltenVK's float math has no NoContraction");
+            check(execution_mode_count(code, words, 331, 6028, ~0u) >= 1, "a fast-math default is declared");
+            check(execution_mode_count(code, words, 16, 4461, 32) == 0,
+                  "32-bit floats don't also preserve signed zeros");
+            if (stages[i] == ST_FS) save_fixture(metal_math_path, code, words);
+        }
+        free(code);
+    }
+    g_shader_no_contraction = 1;
+    g_shader_fast_math_default = 0;
 }
 
 /* F2F between two halves with bit 42 rounds to an integer: DREDGE's colour grading takes frac() of a half as x minus
@@ -2648,7 +2687,8 @@ int main(int argc, char** argv) {
             structured_paths[i] = fixture_path(argv[1], name);
         }
         fswzadd_path = fixture_path(argv[1], "fswzadd");
-        if (fixture_count != 71) {
+        metal_math_path = fixture_path(argv[1], "metal_math");
+        if (fixture_count != 72) {
             fprintf(stderr, "failed to allocate fixture paths\n");
             return 2;
         }
@@ -2664,6 +2704,7 @@ int main(int argc, char** argv) {
     global_buffers();
     float_controls();
     precise_math();
+    metal_math();
     f2f_half_rounding();
     hfma2_immediate();
     tlds_fp16();

@@ -71,7 +71,14 @@ int g_shader_tessellation = 1;
 int g_shader_clock_scopes;
 int g_shader_maximal_reconvergence;
 int g_shader_structured_reconverges;
+int g_shader_no_contraction = 1;
+int g_shader_fast_math_default;
 unsigned long long g_shader_flow_structured, g_shader_flow_loops;
+
+/* a float add or multiply kept apart from the operations around it (g_shader_no_contraction) */
+static void no_contract(SpvEmitter* e, u32 result) {
+    if (g_shader_no_contraction) spv_emit_no_contraction(e, result);
+}
 
 /* the Function variable of a register, predicate or flag (z, s, c, o) */
 static u32 var_of(const DirectCtx* c, u32 v) {
@@ -988,10 +995,10 @@ static void vertex_depth_fix(DirectCtx* c, u32 position, u32 push, u32 push_poin
     u32 z = spv_emit_vec4_extract(&c->emit, c->f32_type, value, 2);
     u32 w = spv_emit_vec4_extract(&c->emit, c->f32_type, value, 3);
     u32 sum = spv_emit_fadd(&c->emit, c->f32_type, z, w);
-    spv_emit_no_contraction(&c->emit, sum);
+    no_contract(&c->emit, sum);
     u32 half = spv_emit_constant_f32(&c->emit, c->f32_type, 0.5f);
     u32 depth = spv_emit_fmul(&c->emit, c->f32_type, sum, half);
-    spv_emit_no_contraction(&c->emit, depth);
+    no_contract(&c->emit, depth);
     value = spv_emit_vec4_insert(&c->emit, vec4_type, value, depth, 2);
     spv_emit_store(&c->emit, position, value);
     spv_emit_branch(&c->emit, merge);
@@ -3883,7 +3890,8 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
         free(pop_targets);
         return NULL;
     }
-    c->ftz_float = can_preserve;
+    int fast_default = g_shader_fast_math_default && can_preserve;
+    c->ftz_float = can_preserve && !fast_default; /* signed zeros aren't kept with the fast-math default */
     c->soft_ftz_on = soft_ftz_on;
     spv_emit_init(&c->emit, (size_t)n * 20 + 128);
     spv_emit_shader_capability(&c->emit);
@@ -4319,8 +4327,12 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
     if (stage == ST_FS) spv_emit_fragment_origin_upper_left(&c->emit, fn);
     if (stage == ST_FS && si->early_fragment_tests) spv_emit_execution_mode(&c->emit, fn, 9, 0, 0); /* EarlyFragmentTests */
     if (depth_output) spv_emit_fragment_depth_replacing(&c->emit, fn);
-    spv_emit_float_controls(&c->emit, fn, fp32_flush && !fp32_preserve && can_flush == SH_FTZ_MODE, can_preserve,
-                            needs_f64 && can_preserve_f64);
+    spv_emit_float_controls(&c->emit, fn, fp32_flush && !fp32_preserve && can_flush == SH_FTZ_MODE,
+                            can_preserve && !fast_default, needs_f64 && can_preserve_f64);
+    if (fast_default) {
+        spv_emit_fast_math_default(&c->emit, fn, c->f32_type, c->u32_type, SPV_FAST_MATH_KEEP_INF_NAN);
+        if (c->f16_type) spv_emit_fast_math_default(&c->emit, fn, c->f16_type, c->u32_type, SPV_FAST_MATH_KEEP_INF_NAN);
+    }
     spv_emit_function_void(&c->emit, void_type, fn, fn_type);
     spv_emit_label(&c->emit, label);
     c->emit.block_end = var_flush;
@@ -6328,7 +6340,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
             u32 result = op == O_FADD_R || op == O_FADD_C || op == O_FADD_I || op == O_FADD32I
                              ? spv_emit_fadd(&c->emit, c->f32_type, left, right)
                              : spv_emit_fmul(&c->emit, c->f32_type, left, right);
-            spv_emit_no_contraction(&c->emit, result);
+            no_contract(&c->emit, result);
             if (soft_ftz) result = float_ftz(c, result);
             /* FMZ (FMUL's 44-45, FMUL32I's 53-54 = 2): a zero factor makes the product 0, even with an infinity */
             if ((op == O_FMUL32I                                      ? B(w, 53, 2)
@@ -6346,7 +6358,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
                 if (sc) {
                     u32 factor = spv_emit_constant_f32(&c->emit, c->f32_type, scale[sc]);
                     result = spv_emit_fmul(&c->emit, c->f32_type, result, factor);
-                    spv_emit_no_contraction(&c->emit, result);
+                    no_contract(&c->emit, result);
                 }
             }
             int sat = op == O_FADD32I ? 0 : op == O_FMUL32I ? B(w, 55, 1) : B(w, 50, 1);
@@ -6435,11 +6447,11 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
                 left = double_mod(c, left, B(w, 46, 1), B(w, 48, 1));
                 right = double_mod(c, right, B(w, 49, 1), B(w, 45, 1));
                 value = spv_emit_fadd(&c->emit, c->f64_type, left, right);
-                spv_emit_no_contraction(&c->emit, value);
+                no_contract(&c->emit, value);
             } else if (op >= O_DMUL_R && op <= O_DMUL_I) {
                 left = double_mod(c, left, 0, B(w, 48, 1));
                 value = spv_emit_fmul(&c->emit, c->f64_type, left, right);
-                spv_emit_no_contraction(&c->emit, value);
+                no_contract(&c->emit, value);
             } else if (op >= O_DFMA_R && op <= O_DFMA_I) {
                 u32 third;
                 right = double_mod(c, right, 0, B(w, 48, 1));
@@ -6542,7 +6554,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
                     u32 scale = spv_emit_uniform_component(&c->emit, c->scale_pointer, c->scale_buffer, zero_index,
                                                            zero_index, zero_index, c->f32_type);
                     value = spv_emit_fmul(&c->emit, c->f32_type, value, scale);
-                    spv_emit_no_contraction(&c->emit, value);
+                    no_contract(&c->emit, value);
                 }
             } else if (interpolation == 2) {
                 /* The hardware interpolates attr/w for a perspective input, and the shader multiplies by w
@@ -6551,12 +6563,12 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
                 u32 coord = spv_emit_load(&c->emit, vec4, fragcoord);
                 u32 wcoord = spv_emit_vec4_extract(&c->emit, c->f32_type, coord, 3);
                 value = spv_emit_fmul(&c->emit, c->f32_type, value, wcoord);
-                spv_emit_no_contraction(&c->emit, value);
+                no_contract(&c->emit, value);
             }
             if (B(w, 54, 2) == 1) {
                 u32 rhs = reg_read_as(c, b, c->f32_type);
                 value = spv_emit_fmul(&c->emit, c->f32_type, value, rhs);
-                spv_emit_no_contraction(&c->emit, value);
+                no_contract(&c->emit, value);
             }
             value = float_saturate(c, value, B(w, 51, 1));
             reg_write_as(c, d, value, c->f32_type);
@@ -6649,7 +6661,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
                     rhs = spv_emit_select(&c->emit, c->f32_type, pick[1],
                                           spv_emit_fnegate(&c->emit, c->f32_type, right), right);
                 result = spv_emit_fadd(&c->emit, c->f32_type, lhs, rhs);
-                spv_emit_no_contraction(&c->emit, result);
+                no_contract(&c->emit, result);
                 if (soft_ftz) result = float_ftz(c, result);
                 if (pick[2]) result = spv_emit_select(&c->emit, c->f32_type, pick[2], right, result);
             }
@@ -6740,7 +6752,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
             u32 pair = fma        ? spv_emit_glsl_ternary(&c->emit, vec2, c->glsl, SPV_GLSL_FMA, lhs, rhs, addend)
                        : multiply ? spv_emit_fmul(&c->emit, vec2, lhs, rhs)
                                   : spv_emit_fadd(&c->emit, vec2, lhs, rhs);
-            spv_emit_no_contraction(&c->emit, pair);
+            no_contract(&c->emit, pair);
             if ((fma || multiply) && precision == 2) pair = half_fmz(c, vec2, pair, lhs, rhs, addend);
             reg_write(c, d, half_pair_result(c, vec2, pair, reg_read(c, d), imm32 ? 0 : B(w, 49, 2), saturate));
         } else if (op == O_HSET2_R || op == O_HSET2_C || op == O_HSET2_I) {

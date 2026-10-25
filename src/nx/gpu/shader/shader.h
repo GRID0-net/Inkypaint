@@ -151,6 +151,14 @@ extern int g_shader_maximal_reconvergence;
    derivatives in branches, subgroup operations, barriers) are then written structured too, instead of in the
    dispatch loop that runs one block of the lanes at the lowest pc an iteration */
 extern int g_shader_structured_reconverges;
+/* Maxwell rounds each FADD and FMUL on its own, and the translation says so (NoContraction), 1 by default. SPIRV-Cross
+   writes such an operation for Metal as a call to an [[clang::optnone]] function, which keeps the Metal compiler from
+   optimizing anything across it: MoltenVK gets 0 (the precise_float setting), with positions still invariant */
+extern int g_shader_no_contraction;
+/* MoltenVK: in place of SignedZeroInfNanPreserve for 32- and 16-bit floats, a fast-math default that keeps infinities
+   and NaNs but lets the compiler fuse, reassociate and ignore the sign of zero (FPFastMathDefault). MoltenVK compiles
+   a module with SignedZeroInfNanPreserve in Metal's Safe math mode, and one with this default in Relaxed mode */
+extern int g_shader_fast_math_default;
 /* programs translated with branches: in structured constructs, and in the dispatch loop (counted, never reset) */
 extern unsigned long long g_shader_flow_structured, g_shader_flow_loops;
 /* in clip_enable: a later stage before rasterization (tessellation or geometry) follows, and the last one applies

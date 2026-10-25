@@ -372,6 +372,11 @@ void spv_emit_fragment_origin_upper_left(SpvEmitter* e, uint32_t function);
 void spv_emit_fragment_depth_replacing(SpvEmitter* e, uint32_t function);
 void spv_emit_float_controls(SpvEmitter* e, uint32_t function, int flush_denorms, int preserve_infnan,
                              int preserve_infnan64);
+/* SPV_KHR_float_controls2's FPFastMathDefault: float_type's operations take flags (FPFastMathMode bits) unless
+   decorated otherwise. In place of SignedZeroInfNanPreserve for that width, which must not be mixed with it */
+void spv_emit_fast_math_default(SpvEmitter* e, uint32_t function, uint32_t float_type, uint32_t u32_type,
+                                uint32_t flags);
+#define SPV_FAST_MATH_KEEP_INF_NAN 0x7000Cu /* NSZ | AllowRecip | AllowContract | AllowReassoc | AllowTransform */
 void spv_emit_local_size(SpvEmitter* e, uint32_t function, uint32_t x, uint32_t y, uint32_t z);
 void spv_emit_name_str(SpvEmitter* e, uint32_t id, const char* name);
 uint32_t spv_emit_type_void(SpvEmitter* e);

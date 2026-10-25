@@ -464,6 +464,28 @@ static u32* sh_spirv(VkSh* s, const u8* code, u64 h, int stage, const u32 mask[2
     }
     return spv;
 }
+/* SNX_SPV_DUMP=dir: each draw program's SPIR-V into dir as <hash>_<stage>_<words>.spv, to read what a costly
+   program became (vk_gpu_profile's SNX_DRAW_SPLIT names them). The files are the game's shaders: they stay local */
+static void sh_dump(u64 hash, int stage, const u32* spv, size_t nw) {
+    static const char* dir;
+    static int known;
+    if (!known) {
+        dir = getenv("SNX_SPV_DUMP");
+        known = 1;
+    }
+    if (!dir || !*dir || !spv) return;
+    char path[1024];
+    snprintf(path, sizeof path, "%s/%016llx_%d_%zu.spv", dir, (unsigned long long)hash, stage, nw);
+    FILE* f = fopen(path, "rb");
+    if (f) {
+        fclose(f);
+        return;
+    }
+    f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(spv, 4, nw, f);
+    fclose(f);
+}
 /* A draw's shader (sh_spirv's arguments, and mlen, the bytes of code the translation reads): translated, its module
    made, kept in the shader file with its program. One that couldn't be translated comes back failed; NULL when out
    of memory */
@@ -481,8 +503,10 @@ static VkSh* sh_make(const u8* code, u32 mlen, u64 h, int stage, const u32 mask[
         if (!VK_OK(vkCreateShaderModule(g_vk.dev, &mi, NULL, &s->mod))) {
             s->failed = 1;
             snprintf(s->si.first_unsupported, sizeof s->si.first_unsupported, "vkCreateShaderModule failed");
-        } else
+        } else {
+            sh_dump(h, stage, spv, nw);
             pf_shader_record(s, spv, nw, code, src_bytes(mlen), xfb);
+        }
         free(spv);
     } else
         s->failed = 1;
@@ -1314,6 +1338,7 @@ static VkSh* sh_from_record(const PfShader* r, const u32* cbr, const u32* spv) {
     s->clen_a = r->clen_a;
     s->qh_a = r->qh_a;
     for (int i = 0; i < s->si.ntex; i++) s->indexed |= (s->si.tex[i].flags & SNX_TEX_INDEXED) != 0;
+    sh_dump(s->hash, s->stage, spv, r->nspv);
     s->mod = vk_module_spv(spv, r->nspv);
     if (!s->mod) {
         free(s->cbr.r);
@@ -1360,6 +1385,7 @@ static u64 pf_load_source(void* ctx, const PfSource* r, const u32* cbr, const u8
                    &nw);
     g_replay = NULL;
     if (!spv || vk_spirv_unavailable(spv, nw) || !(s->mod = vk_module_spv(spv, nw))) goto fail;
+    sh_dump(s->hash, s->stage, spv, nw);
     pf_shader_into(&g_pf.file, s, mod_bits(s->mod), spv, nw, window, r->ncode, xfb);
     free(spv);
     free(window);
@@ -1467,6 +1493,8 @@ static void pf_key(char* out, size_t n, size_t* guest) {
                   (u32)g_shader_tessellation,
                   (u32)g_shader_clock_scopes,
                   (u32)g_shader_structured_reconverges,
+                  (u32)g_shader_no_contraction,
+                  (u32)g_shader_fast_math_default,
                   (u32)g_vk_flush_denorm,
                   (u32)g_vk_preserve_infnan,
                   (u32)g_vk_preserve_infnan64,

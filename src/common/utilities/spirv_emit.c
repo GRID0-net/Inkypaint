@@ -189,6 +189,18 @@ void spv_emit_float_controls(SpvEmitter* e, uint32_t function, int flush_denorms
     }
 }
 
+void spv_emit_fast_math_default(SpvEmitter* e, uint32_t function, uint32_t float_type, uint32_t u32_type,
+                                uint32_t flags) {
+    spv_emit_extension(e, "SPV_KHR_float_controls2");
+    spv_emit_capability(e, 6029); /* FloatControls2 */
+    uint32_t value = spv_emit_constant_u32(e, u32_type, flags);
+    instruction(&e->execution_modes, 331, 5); /* OpExecutionModeId */
+    put(&e->execution_modes, function);
+    put(&e->execution_modes, 6028); /* FPFastMathDefault */
+    put(&e->execution_modes, float_type);
+    put(&e->execution_modes, value);
+}
+
 void spv_emit_local_size(SpvEmitter* e, uint32_t function, uint32_t x, uint32_t y, uint32_t z) {
     assert(x && y && z);
     instruction(&e->execution_modes, SPV_OP_EXECUTION_MODE, 6);

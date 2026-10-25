@@ -12,6 +12,8 @@
 #   ./inkypaint.sh perf [secs] [--KEY=VALUE...] a measured run: frame rate, GPU time, memory, threads, call stacks
 #   ./inkypaint.sh diag [secs]  three measured runs that narrow down the rendering bugs (about 6 minutes)
 #   ./inkypaint.sh gpudiag [secs] three measured runs that split the GPU's time: fast math, half resolution
+#   ./inkypaint.sh shaderprof [secs] a measured run with every draw timed alone: the costliest draws by their
+#                             programs, whose SPIR-V lands in local/spv (the game's shaders: they stay here)
 #   ./inkypaint.sh capture    the game with Metal's frame capture on, for Xcode's GPU profiler
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
@@ -236,6 +238,17 @@ do_gpudiag() {
     done
 }
 
+# Which draws the GPU's time goes to: each draw ends its pass so it is timed alone (the frame rate drops, as every
+# draw then stores and loads its targets), and the log lists the costliest draws a frame with their vertex and
+# fragment programs. Each program's SPIR-V is written to local/spv/<hash>_<stage>_<words>.spv to read what it became
+do_shaderprof() {
+    local secs=${1:-60}; shift || true
+    mkdir -p "$LOCAL/spv"
+    SNX_DRAW_SPLIT=1 SNX_SPV_DUMP="$LOCAL/spv" do_perf "$secs" "$@" || return 1
+    local d; d=$(ls -td "$LOGS"/perf-*/ | head -1)
+    grep "GPU   draw" "$d/game.log" | tail -40
+}
+
 # For Xcode: the game with Metal's capture layer on and no time limit. In Xcode, Debug > Attach to Process picks the
 # game (its name is its title ID), then the debug bar's Metal button captures a frame: its Performance view times
 # every draw and the shader profiler each line of the translated MSL. Instruments' Metal System Trace template
@@ -255,6 +268,7 @@ case "$cmd" in
     perf) logged perf do_perf "$@" ;;
     diag) logged diag do_diag "$@" ;;
     gpudiag) logged gpudiag do_gpudiag "$@" ;;
+    shaderprof) logged shaderprof do_shaderprof "$@" ;;
     capture) logged capture do_capture "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
     *) sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//' ;;

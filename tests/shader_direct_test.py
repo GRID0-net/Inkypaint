@@ -79,6 +79,7 @@ def main():
             *(Path(directory) / f'audit_{i}.spv' for i in range(6)),
             *(Path(directory) / f'structured_{i}.spv' for i in range(2)),
             Path(directory) / 'fswzadd.spv',
+            Path(directory) / 'metal_math.spv',
         )
         subprocess.run([args.regressions, directory], check=True)
         for fixture in (path, vertex, abs_fragment, stack_fragment, subgroup, *fixtures):

@@ -1073,6 +1073,9 @@ extern u64 g_vk_fb_draws, g_vk_fb_barriers, g_vk_fb_restarts, g_vk_rt_copies;
 void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt, u64 att_bytes);
 void vk_gpuprof_pass_end(VkCommandBuffer cb);
 void vk_gpuprof_pass_end_site(const char* file, int line); /* the code that ended a pass, counted */
+/* a draw recorded in the open pass, by its programs' hashes, for SNX_DRAW_SPLIT's table of draws by GPU time */
+void vk_gpuprof_draw(u64 vs, u64 fs, u32 count, u32 instances);
+int vk_gpuprof_split(void); /* SNX_DRAW_SPLIT (with vk_gpu_profile): every draw ends its pass, to be timed alone */
 void vk_gpuprof_frame_done(u32 slot);
 /* the device's timestamps next to the client's clock (VK_EXT_calibrated_timestamps with a host time domain) */
 int vk_gpuprof_calibrated(void);

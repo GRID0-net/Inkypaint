@@ -262,7 +262,10 @@ static u32* compute_to_spirv(const u8* code, const u64* words, u32 max_bytes, Sh
     }
     spv_emit_compute_entry_str(&c->e, fn, "main", interfaces, ninterface);
     spv_emit_local_size(&c->e, fn, meta.cs_local[0], meta.cs_local[1], meta.cs_local[2]);
-    spv_emit_float_controls(&c->e, fn, flush && can_flush == SH_FTZ_MODE, can_preserve, 0);
+    spv_emit_float_controls(&c->e, fn, flush && can_flush == SH_FTZ_MODE, can_preserve && !g_shader_fast_math_default,
+                            0);
+    if (can_preserve && g_shader_fast_math_default)
+        spv_emit_fast_math_default(&c->e, fn, c->f, c->u, SPV_FAST_MATH_KEEP_INF_NAN);
     spv_emit_function_void(&c->e, vt, fn, fnt);
     spv_emit_label(&c->e, label);
     for (u32 i = 0; i < 255; i++)
@@ -382,7 +385,7 @@ static u32* compute_to_spirv(const u8* code, const u64* words, u32 max_bytes, Sh
                 result = spv_emit_glsl_ternary(&c->e, c->f, c->glsl, SPV_GLSL_FMA, lhs, rhs, add);
             } else {
                 result = spv_emit_fmul(&c->e, c->f, lhs, rhs);
-                spv_emit_no_contraction(&c->e, result);
+                if (g_shader_no_contraction) spv_emit_no_contraction(&c->e, result);
             }
             cw(c, d, spv_emit_bitcast(&c->e, c->u, result));
         } else if (id == O_LDG || id == O_STG) {

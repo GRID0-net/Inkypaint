@@ -516,6 +516,11 @@ static int create_device(void) {
                                       !getenv("SNX_NO_STRUCTURED_RECONVERGENCE");
     if (g_shader_structured_reconverges)
         LOG("vulkan: programs whose lanes reconverge are written structured (MoltenVK reconverges at merges)\n");
+    /* precise_float: 1 keeps every float add and multiply rounded on its own, 0 lets the driver fuse them, 2 (auto)
+       lets MoltenVK, where keeping them apart costs the Metal compiler its optimizations (shader.h) */
+    g_shader_no_contraction = g_settings.precise_float == 1 || (g_settings.precise_float == 2 && !g_vk.is_moltenvk);
+    g_shader_fast_math_default = g_vk.is_moltenvk && !g_shader_no_contraction;
+    if (!g_shader_no_contraction) LOG("vulkan: float adds and multiplies may be fused by the driver (precise_float)\n");
     g_shader_clock_scopes =
         has_shader_clock ? (qclock.shaderSubgroupClock ? 1 : 0) | (qclock.shaderDeviceClock ? 2 : 0) : 0;
     g_vk.has_divisor = g_vk.has_divisor && fdiv.vertexAttributeInstanceRateDivisor;

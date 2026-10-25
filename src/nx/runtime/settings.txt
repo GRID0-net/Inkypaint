@@ -236,6 +236,15 @@ setting GPU timestamps
     help this computer took to decode its commands. 1 = when the game submitted their commands, as a GPU that kept up
     help would stamp them. A game that scales its resolution by its GPU time (one does, every frame) keeps its full
     help resolution with 1 instead of shrinking it for time the renderer spends on the CPU
+setting Precise float
+    key precise_float
+    int 0 2
+    default 2
+    words Off|On|Auto
+    help Whether the GPU keeps each float add and multiply of the game's shaders rounded on its own, as the Switch does.
+    help On is exact. Off lets the driver fuse them into multiply-adds, which on macOS lets Metal's compiler optimize the
+    help shaders at all (MoltenVK makes each kept-apart operation a call it can't optimize across). Auto: off on
+    help MoltenVK, on elsewhere. Changing it translates the shaders again
 setting Pass hoist
     key pass_hoist
     int 0 1

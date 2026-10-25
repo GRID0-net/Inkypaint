@@ -3181,7 +3181,9 @@ retry:
         for (int i = 0; i < 5; i++)
             if (stages[i] && (stages[i]->si.gbuf_wmask || stages[i]->si.nimg)) g_storage_dirty = 1;
     }
+    vk_gpuprof_draw(vs ? vs->hash : 0, fs ? fs->hash : 0, indexed ? icount : count, instances);
     g_vk_drawn++;
+    if (vk_gpuprof_split()) vk_render_end(); /* SNX_DRAW_SPLIT: each draw timed as a pass of its own */
 }
 
 /* DRAW_TEXTURE (3D 0x420-0x42B, drawn when 0x42B is written): a texture's rectangle blitted onto color target 0, as

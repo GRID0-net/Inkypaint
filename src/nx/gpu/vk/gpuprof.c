@@ -29,6 +29,7 @@ typedef struct {
     u64 bytes;
     u16 q0, q1; /* the Tracy query ids its begin and end went out with, 0 when it emitted none */
     u64 ep; /* the connection the begin went out on: an end or a time from another one is dropped */
+    u64 vs, fs, verts; /* its last draw's programs, and the vertices of its draws */
 } GpPass;
 typedef struct {
     VkQueryPool pool;
@@ -43,6 +44,21 @@ typedef struct {
 } GpKey;
 
 static int g_on = -1;
+/* SNX_DRAW_SPLIT: each draw is a pass of its own, and its time goes to its programs here (GP_DRAWS of them) */
+#define GP_DRAWS 4096
+typedef struct {
+    u64 vs, fs, gva, ns, n, verts;
+    u32 w, h;
+} GpDraw;
+static GpDraw g_draw_t[GP_DRAWS];
+static int g_split = -1;
+int vk_gpuprof_split(void) {
+    if (g_split < 0) {
+        const char* e = getenv("SNX_DRAW_SPLIT");
+        g_split = e && *e && *e != '0';
+    }
+    return g_split && g_on > 0;
+}
 static GpSlot* g_slot[VK_FRAMES];
 static GpKey g_key[GP_KEYS];
 static u64 g_pass_ns, g_span_ns, g_frames, g_lost;
@@ -118,6 +134,8 @@ void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt, u
     GpPass* p = &g->pass[g->used / 2];
     p->gva = s ? s->gva : 0;
     p->att_bytes = att_bytes;
+    p->vs = p->fs = p->verts = 0;
+    if (g_split < 0) vk_gpuprof_split();
     p->w = s ? s->w : 0;
     p->h = s ? s->h : 0;
     p->fmt = s ? (u32)s->f.vk : 0;
@@ -137,6 +155,32 @@ void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt, u
         p->q0 = snx_tracy_gpu_zone_begin(name, 0x3d8f4a, VK_GPU_CTX_GRAPHICS, &p->ep);
     }
 #endif
+}
+void vk_gpuprof_draw(u64 vs, u64 fs, u32 count, u32 instances) {
+    GpSlot* g;
+    if (!g_in_pass || !(g = gp_slot())) return;
+    GpPass* p = &g->pass[g->used / 2];
+    p->vs = vs;
+    p->fs = fs;
+    p->verts += (u64)count * (instances ? instances : 1);
+}
+static void gp_draw_add(const GpPass* p, u64 ns) {
+    u64 h = (p->vs * 0x9E3779B97F4A7C15ull) ^ (p->fs * 0xC2B2AE3D27D4EB4Full) ^ p->gva;
+    for (u32 i = 0; i < GP_DRAWS; i++) {
+        GpDraw* d = &g_draw_t[(h + i) & (GP_DRAWS - 1)];
+        if (!d->n) {
+            d->vs = p->vs, d->fs = p->fs, d->gva = p->gva, d->w = p->w, d->h = p->h;
+        } else if (d->vs != p->vs || d->fs != p->fs || d->gva != p->gva)
+            continue;
+        d->n++;
+        d->ns += ns;
+        d->verts += p->verts;
+        return;
+    }
+}
+static int draw_cmp(const void* a, const void* b) {
+    u64 x = ((const GpDraw*)a)->ns, y = ((const GpDraw*)b)->ns;
+    return x < y ? 1 : x > y ? -1 : 0;
 }
 /* after vkCmdEndRendering */
 void vk_gpuprof_pass_end(VkCommandBuffer cb) {
@@ -262,6 +306,7 @@ void vk_gpuprof_frame_done(u32 slot) {
                                      g->pass[i / 2].xfers, g->pass[i / 2].barriers};
         GpKey* k = gp_key(&g->pass[i / 2]);
         g_pass_ns += ns;
+        if (g_split > 0 && g->pass[i / 2].draws == 1) gp_draw_add(&g->pass[i / 2], ns);
         if (!k) continue;
         k->ns += ns;
         k->passes++;
@@ -372,6 +417,19 @@ static void gp_report(void) {
                 (double)g_last[i].gap_ns / 1e6, g_last[i].xfers, g_last[i].barriers);
             shown++;
         }
+    if (g_split > 0) {
+        static GpDraw sorted_d[GP_DRAWS];
+        memcpy(sorted_d, g_draw_t, sizeof sorted_d);
+        qsort(sorted_d, GP_DRAWS, sizeof *sorted_d, draw_cmp);
+        for (int i = 0; i < 40 && sorted_d[i].n; i++)
+            LOG("vulkan: GPU   draw %2d: %.3f ms a frame, %.1f a frame, %.0f vertices each, vs %016llx fs %016llx, target "
+                "%llx %ux%u\n",
+                i, (double)sorted_d[i].ns / 1e6 / (double)g_frames, (double)sorted_d[i].n / (double)g_frames,
+                (double)sorted_d[i].verts / (double)sorted_d[i].n, (unsigned long long)sorted_d[i].vs,
+                (unsigned long long)sorted_d[i].fs, (unsigned long long)sorted_d[i].gva, sorted_d[i].w,
+                sorted_d[i].h);
+        memset(g_draw_t, 0, sizeof g_draw_t);
+    }
     memset(g_key, 0, sizeof g_key);
     g_pass_ns = g_span_ns = g_frames = g_lost = 0;
 }
