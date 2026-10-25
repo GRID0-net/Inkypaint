@@ -1951,6 +1951,25 @@ static u32 gs_input_vertices(u32 topology, int tes_on, u32 params) {
                                               : 3;
 }
 
+/* SNX_SHADOW_DEBUG, for finding why surfaces shadow themselves: what changes in draws into depth alone (shadow
+   maps), comma separated: flip (the other front face), nocull, nobias, bias=F (the bias times F) */
+static struct {
+    int known, flip, nocull, nobias;
+    float bias;
+} g_shdbg;
+static void shadow_debug_read(void) {
+    if (g_shdbg.known) return;
+    g_shdbg.known = 1;
+    g_shdbg.bias = 1.0f;
+    const char* e = getenv("SNX_SHADOW_DEBUG");
+    if (!e || !*e) return;
+    g_shdbg.flip = strstr(e, "flip") != NULL;
+    g_shdbg.nocull = strstr(e, "nocull") != NULL;
+    g_shdbg.nobias = strstr(e, "nobias") != NULL;
+    const char* b = strstr(e, "bias=");
+    if (b) g_shdbg.bias = (float)atof(b + 5);
+    LOG("vulkan: depth-only draws changed (SNX_SHADOW_DEBUG=%s)\n", e);
+}
 static VkFrontFace front_face_at_viewport(const u32* r, float viewport_height) {
     int cw = r[0x647] == 0x900;
     /* A negative Vulkan viewport already reverses framebuffer winding. WINDOW_ORIGIN_FLIP_Y also reverses guest
@@ -3038,6 +3057,12 @@ retry:
                                : r[0x648] == 0x408 ? VK_CULL_MODE_FRONT_AND_BACK
                                                    : VK_CULL_MODE_BACK_BIT;
         VkFrontFace front = front_face_at_viewport(r, vp.height);
+        shadow_debug_read();
+        if (!n && zt) {
+            if (g_shdbg.flip)
+                front = front == VK_FRONT_FACE_CLOCKWISE ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+            if (g_shdbg.nocull) cull = VK_CULL_MODE_NONE;
+        }
         u32 prim_restart = restart && (indexed == 1 || indexed == 3);
         DYN(cull, cull, rec_CmdSetCullMode(cb, cull));
         DYN(front, front, rec_CmdSetFrontFace(cb, front));
@@ -3068,6 +3093,11 @@ retry:
         memcpy(&un, &r[0x56F], 4);
         memcpy(&clamp, &r[0x61F], 4);
         float bias[3] = {un, g_vk.feat.depthBiasClamp ? clamp : 0.0f, fac};
+        if (!n && zt && g_shdbg.nobias) bias[0] = bias[1] = bias[2] = 0;
+        if (!n && zt) {
+            bias[0] *= g_shdbg.bias;
+            bias[2] *= g_shdbg.bias;
+        }
         DYNV(bias, bias, rec_CmdSetDepthBias(cb, bias[0], bias[1], bias[2]));
     }
     if (!g_vk.feat.depthClamp && vk_render_depth_clamp(r))

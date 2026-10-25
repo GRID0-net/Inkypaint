@@ -18,6 +18,8 @@
 #                             (each reads its table's first texture), then through texture arrays
 #   ./inkypaint.sh rtdump [frame] one frame's rendering passes as pictures (frame 1500 by default, about 25 s in),
 #                             into local/rtdump-<time> (the game's frame: it stays here)
+#   ./inkypaint.sh shadowdiag [secs] four short runs drawing the shadow maps differently (as now, the other front
+#                             face, no culling, four times the depth bias), a screenshot of each in logs/shadowdiag-<time>
 #   ./inkypaint.sh capture    the game with Metal's frame capture on, for Xcode's GPU profiler
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
@@ -289,6 +291,24 @@ do_rtdump() {
     say "$n pictures, $(wc -l < "$out/index.txt" 2>/dev/null || echo 0) passes listed in local/$(basename "$out")/index.txt"
 }
 
+# The player model and the critter come out nearly black where the game shows white cloth and skin: the
+# screen-space shadow mask has them in shadow all over, as if they shadowed themselves. Four runs that change only
+# the draws into depth alone (the shadow maps), each ending in a screenshot side by side in logs/shadowdiag-<time>
+do_shadowdiag() {
+    local secs=${1:-40}
+    local out="$LOGS/shadowdiag-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    for mode in none flip nocull bias=4; do
+        say "shadowdiag: $mode"
+        ( cd "$GAME_DIR" && SNX_SHADOW_DEBUG="$([ "$mode" = none ] || echo "$mode")" SDL_VULKAN_LIBRARY="$mvk" \
+            MVK_CONFIG_LOG_LEVEL=2 "./$GAME_ID" --seconds="$secs" --shot="$out/${mode/=/}" ) > "$out/${mode/=/}.txt" 2>&1
+        [ -f "$out/${mode/=/}.ppm" ] && sips -s format png "$out/${mode/=/}.ppm" --out "$out/${mode/=/}.png" > /dev/null 2>&1 &&
+            rm -f "$out/${mode/=/}.ppm"
+    done
+    ls "$out"
+}
+
 # For Xcode: the game with Metal's capture layer on and no time limit. In Xcode, Debug > Attach to Process picks the
 # game (its name is its title ID), then the debug bar's Metal button captures a frame: its Performance view times
 # every draw and the shader profiler each line of the translated MSL. Instruments' Metal System Trace template
@@ -311,6 +331,7 @@ case "$cmd" in
     shaderprof) logged shaderprof do_shaderprof "$@" ;;
     texdiag) logged texdiag do_texdiag "$@" ;;
     rtdump) logged rtdump do_rtdump "$@" ;;
+    shadowdiag) logged shadowdiag do_shadowdiag "$@" ;;
     capture) logged capture do_capture "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
     *) sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//' ;;
