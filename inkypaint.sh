@@ -167,7 +167,7 @@ do_run() {
 # (vm_stat: swapping), the game's threads' CPU (ps -M) and a 10-second call-stack sample (sample) are written beside
 # its log in logs/perf-<time>/. Extra --KEY=VALUE settings go to the game, to compare one change against another
 do_perf() {
-    local secs=${1:-90}; shift || true
+    local secs=${1:-70}; shift || true
     [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
     local out="$LOGS/perf-$(stamp)"; mkdir -p "$out"
     local mvk; mvk=$(mvk_dylib)
@@ -191,7 +191,7 @@ do_perf() {
     ) &
     local poll=$!
     # the call stacks once the shaders of earlier runs are loaded and the game is past its start
-    local at=$(( secs > 60 ? secs / 2 : 30 ))
+    local at=$(( secs > 60 ? secs - 20 : 30 ))
     sleep "$at"
     kill -0 "$pid" 2>/dev/null && sample "$pid" 10 -mayDie -file "$out/sample.txt" > /dev/null 2>&1
     wait "$game"; local rc=$?
@@ -207,7 +207,7 @@ do_perf() {
 # The rendering bugs (invisible limbs, missing eye colour): the same scene three ways, each a measured run whose
 # last frame and log land in its own logs/perf-<time>/, to tell a macro, a MoltenVK setting or the translation apart
 do_diag() {
-    local secs=${1:-95}
+    local secs=${1:-70}
     say "diag 1/3: GPU macros checked against the interpreter (mme_verify), MoltenVK logging its setup"
     MVK_CONFIG_LOG_LEVEL=3 do_perf "$secs" --mme_verify=1 || return 1
     say "diag 2/3: every GPU macro interpreted (no native or compiled macros)"

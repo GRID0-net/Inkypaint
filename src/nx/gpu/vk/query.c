@@ -245,8 +245,10 @@ int vk_query_report(u32 chan, u64 gva, u32 len, u64 ticks) {
     QCounter* c = counter(chan, 0);
     if (!c || !c->started || c->bad || c->whead - c->wtail == QWAIT) return 0;
     end_own(c);
-    vk_render_end();
-    vk_query_flush(vk_cmd()); /* the segments counted so far, copied in the submit the report waits for */
+    /* the segments counted so far are copied in the submit the report waits for: every submit copies the segments
+       ended before it (cmd.c's submit calls vk_query_flush), so the pass goes on. Copying here ended it, and a tiler
+       GPU stores every target at a pass's end and loads them at the next one's begin: one game reports 15 times a
+       frame from its main pass */
     c->wait[c->whead++ % QWAIT] = c->reported;
     c->reported = g_q.next;
     vk_release_samples(gva, len, (u32)(c - g_qc), c->first, g_q.next, ticks);
@@ -491,6 +493,8 @@ int vk_query_pred_flush(void) {
                                       .pBufferInfo = &bufs[i]};
     vkUpdateDescriptorSets(g_vk.dev, 3, w, 0, NULL);
     vk_render_end(); /* a dispatch is outside a rendering pass */
+    /* the counts of the segments its reports sum, which a report no longer copies when it is made (vk_query_report) */
+    vk_query_flush(cb);
     /* the counts' copies (vk_query_flush) and an earlier batch's predicates a group starts from before the shader
        reads them, and the draws predicated on a slot before it is written again. The batch's words are host writes,
        made visible by the submit */

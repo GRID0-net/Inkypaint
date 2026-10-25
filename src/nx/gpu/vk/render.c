@@ -34,6 +34,30 @@ static struct {
     u32 fb, fb_written, fb_read;
 } g_rp;
 u64 g_vk_fb_draws, g_vk_fb_barriers, g_vk_fb_restarts, g_vk_rt_copies;
+static int g_storage_dirty; /* global memory or an image written by a shader since the last full barrier */
+static int g_barrier_owed;  /* an ordering method deferred in the open pass (vk_render_defer_barrier) */
+u64 g_vk_barriers_deferred;
+
+void vk_storage_written(void) { g_storage_dirty = 1; }
+void vk_storage_ordered(void) { g_storage_dirty = 0; }
+int vk_render_defer_barrier(void) {
+    if (!g_rp.open || g_storage_dirty) return 0;
+    g_barrier_owed = 1;
+    g_vk_barriers_deferred++;
+    return 1;
+}
+/* the full barrier the ordering methods record (renderer.c's), owed by a pass that ended */
+static void owed_barrier(VkCommandBuffer cb) {
+    VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                           .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                           .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+                           .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                           .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
+    rec_CmdPipelineBarrier2(cb, &di);
+    g_barrier_owed = 0;
+    g_storage_dirty = 0;
+}
 
 void vk_render_end_at(const char* file, int line) {
     if (!g_rp.open) return;
@@ -43,6 +67,7 @@ void vk_render_end_at(const char* file, int line) {
     vk_query_pass_end(cb); /* a query begun in the pass ends in it */
     rec_CmdEndRendering(cb);
     vk_gpuprof_pass_end(cb);
+    if (g_barrier_owed) owed_barrier(cb);
 }
 
 /* the targets the registers name, without opening anything */
@@ -3037,6 +3062,11 @@ retry:
     if (zt && !zt_ro && (r[0x4BA] || (r[0x4E0] && ((r[0x4E7] & 0xFF) || (r[0x565] && (r[0x3D6] & 0xFF))))) &&
         zt_written(zt, ch->render_pred, zt_undefined))
         target_written(zt);
+    {   /* storage the draw's shaders wrote: the next ordering method can't be deferred (vk_render_defer_barrier) */
+        VkSh* stages[5] = {vs, tcs, tes, gs, fs};
+        for (int i = 0; i < 5; i++)
+            if (stages[i] && (stages[i]->si.gbuf_wmask || stages[i]->si.nimg)) g_storage_dirty = 1;
+    }
     g_vk_drawn++;
 }
 

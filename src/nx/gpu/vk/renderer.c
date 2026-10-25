@@ -179,9 +179,15 @@ static void vkr_method_barrier(int kind)
 		vk_unlock();
 		return;
 	}
+	/* inside a pass with no storage written since the last full barrier, it is owed until the pass ends */
+	if (vk_render_defer_barrier()) {
+		vk_unlock();
+		return;
+	}
 	vk_render_end();
 	/* CPU-visible releases wait for completion in the release path. */
 	rec_CmdPipelineBarrier2(vk_cmd(), &di);
+	vk_storage_ordered();
 	vk_unlock();
 }
 static int vkr_blit(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, double sx, double sy, double sdx,
@@ -212,6 +218,7 @@ static void vkr_dispatch(GpuChannel* ch, const u32* q, u64 code) {
     r3d_pending_flush(); /* a merged draw the front end is holding comes first */
     vk_lock();
     vk_dispatch(ch, q, code);
+    vk_storage_written(); /* a compute shader's writes: the next ordering method is recorded, not deferred */
     vk_unlock();
 }
 /* Pending shader results land before the stream signals or waits. */

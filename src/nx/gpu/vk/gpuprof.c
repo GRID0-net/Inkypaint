@@ -328,6 +328,12 @@ static void gp_report(void) {
             (double)sorted[i].ns / 1e6 / (double)g_frames, (unsigned long long)sorted[i].passes,
             (unsigned long long)sorted[i].draws, (unsigned long long)sorted[i].gva, sorted[i].w, sorted[i].h,
             sorted[i].fmt);
+    {
+        static u64 deferred_at;
+        LOG("vulkan: GPU   %.1f ordering methods a frame kept in their pass\n",
+            (double)(g_vk_barriers_deferred - deferred_at) / (double)g_frames);
+        deferred_at = g_vk_barriers_deferred;
+    }
     qsort(g_site, GP_SITES, sizeof *g_site, site_cmp);
     for (int i = 0; i < 16 && g_site[i].n; i++) {
         const char* f = strrchr(g_site[i].file, '/');

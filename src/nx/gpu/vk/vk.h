@@ -975,6 +975,18 @@ u64 vk_cs_skipped(char* why, size_t size);
    end and the next begin cost a tiler GPU a store and a load of every target */
 void vk_render_end_at(const char* file, int line);
 #define vk_render_end() vk_render_end_at(__FILE__, __LINE__)
+/* The 3D engine's ordering methods (wait for idle, the fragment barrier, a data cache invalidate) inside an open pass.
+   On a tiler GPU each ended pass stores every target and the next one loads them again: one game's 43 barriers a
+   frame cost two thirds of its GPU time at 1080p. Within a pass, draws see each other's target writes in order
+   whatever the barrier says, and what earlier passes, copies and uploads wrote reaches them through the barriers the
+   pass's own begin and each texture's binding record. The barrier orders nothing else unless some shader wrote
+   global memory or an image since the last full barrier (a draw's storage writes, a compute dispatch): then 0, and
+   the caller ends the pass and records it. Else 1, the barrier owed until the pass ends for any reason, when it is
+   recorded right after */
+int vk_render_defer_barrier(void);
+void vk_storage_written(void); /* a draw's or a dispatch's shader wrote global memory or an image */
+void vk_storage_ordered(void); /* a full memory barrier was recorded after them */
+extern u64 g_vk_barriers_deferred; /* ordering methods kept in their pass, logged by vk_gpu_profile */
 /* the on-screen controls and the game's menu over a swapchain image in TRANSFER_DST_OPTIMAL, which it stays in;
    safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
 void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
