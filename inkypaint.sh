@@ -8,7 +8,8 @@
 #   ./inkypaint.sh setup      Homebrew packages and Ryujinx's MoltenVK (asks before installing anything)
 #   ./inkypaint.sh build      configure and build the runtime and driver into build/macos
 #   ./inkypaint.sh prepare    extract the base game with the 11.3.0 update, then recompile it
-#   ./inkypaint.sh run [secs] run the recompiled game (default: until you close it), screenshot at the end
+#   ./inkypaint.sh run [secs] [--KEY=VALUE...]  run the game (default: until you close it), screenshot at the end
+#   ./inkypaint.sh perf [secs] [--KEY=VALUE...] a measured run: frame rate, GPU time, memory, threads, call stacks
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
 # Everything the game is made of stays in this folder: local/ (extraction, the recompiled game, its saves and logs)
@@ -143,7 +144,7 @@ do_prepare() {
 }
 
 do_run() {
-    local secs=${1:-0}
+    local secs=${1:-0}; shift || true   # the rest: --KEY=VALUE settings for this run
     [ -d "$GAME_DIR" ] || die "not prepared yet: ./inkypaint.sh prepare"
     local exe="$GAME_DIR/$GAME_ID"
     [ -x "$exe" ] || die "no runtime copy at $exe (the build deploys it: ./inkypaint.sh build)"
@@ -152,11 +153,52 @@ do_run() {
     local shots="$LOGS/shots"; mkdir -p "$shots"
     local args=(--shot="$shots/run-$(stamp)")
     [ "$secs" -gt 0 ] && args+=(--seconds="$secs")
+    [ $# -gt 0 ] && args+=("$@")
     local how="until you close the window"; [ "$secs" -gt 0 ] && how="for $secs seconds"
     say "running Splatoon 3 with MoltenVK $MVK_RELEASE, $how"
     ( cd "$GAME_DIR" && SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 "./$GAME_ID" "${args[@]}" )
     local rc=$?
     [ -f "$GAME_DIR/$GAME_ID.log" ] && cp "$GAME_DIR/$GAME_ID.log" "$LOGS/game-$(stamp).log" && say "game log copied to logs/"
+    return $rc
+}
+
+# A measured run: the game for $1 seconds (default 90) with the GPU's time per pass logged, while the Mac's memory
+# (vm_stat: swapping), the game's threads' CPU (ps -M) and a 10-second call-stack sample (sample) are written beside
+# its log in logs/perf-<time>/. Extra --KEY=VALUE settings go to the game, to compare one change against another
+do_perf() {
+    local secs=${1:-90}; shift || true
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    local out="$LOGS/perf-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    say "measured run for $secs s into logs/$(basename "$out") (settings: ${*:-none})"
+    echo "settings: ${*:-none}" > "$out/settings.txt"
+    ( cd "$GAME_DIR" && SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 \
+        "./$GAME_ID" --seconds="$secs" --vk_gpu_profile=1 --shot="$out/last" "$@" ) > "$out/console.txt" 2>&1 &
+    local game=$!
+    sleep 3
+    local pid; pid=$(pgrep -n -x "$GAME_ID" || echo "$game")
+    echo "pid $pid" >> "$out/settings.txt"
+    vm_stat 2 > "$out/vm_stat.txt" 2>&1 &
+    local vms=$!
+    (
+        local t=0
+        while kill -0 "$pid" 2>/dev/null; do
+            { echo "== t=$t s"; ps -M -p "$pid" -o pid,%cpu,rss 2>/dev/null; } >> "$out/threads.txt"
+            memory_pressure 2>/dev/null | tail -1 >> "$out/pressure.txt"
+            sleep 5; t=$((t + 5))
+        done
+    ) &
+    local poll=$!
+    # the call stacks once the shaders of earlier runs are loaded and the game is past its start
+    local at=$(( secs > 60 ? secs / 2 : 30 ))
+    sleep "$at"
+    kill -0 "$pid" 2>/dev/null && sample "$pid" 10 -mayDie -file "$out/sample.txt" > /dev/null 2>&1
+    wait "$game"; local rc=$?
+    kill "$vms" "$poll" 2>/dev/null
+    cp "$GAME_DIR/$GAME_ID.log" "$out/game.log" 2>/dev/null
+    cp "$GAME_DIR/threads.txt" "$out/game-threads.txt" 2>/dev/null
+    grep "perf:" "$out/game.log" | tail -20
+    say "done: logs/$(basename "$out")"
     return $rc
 }
 
@@ -167,6 +209,7 @@ case "$cmd" in
     build) logged build do_build ;;
     prepare) logged prepare do_prepare ;;
     run) logged run do_run "$@" ;;
+    perf) logged perf do_perf "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
-    *) sed -n '4,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
