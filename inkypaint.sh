@@ -14,6 +14,8 @@
 #   ./inkypaint.sh gpudiag [secs] three measured runs that split the GPU's time: fast math, half resolution
 #   ./inkypaint.sh shaderprof [secs] a measured run with every draw timed alone: the costliest draws by their
 #                             programs, whose SPIR-V lands in local/spv (the game's shaders: they stay here)
+#   ./inkypaint.sh texdiag [secs] two measured runs for the missing skin and eye colours: indexed textures as now
+#                             (each reads its table's first texture), then through texture arrays
 #   ./inkypaint.sh capture    the game with Metal's frame capture on, for Xcode's GPU profiler
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
@@ -176,7 +178,7 @@ do_perf() {
     local out="$LOGS/perf-$(stamp)"; mkdir -p "$out"
     local mvk; mvk=$(mvk_dylib)
     say "measured run for $secs s into logs/$(basename "$out") (settings: ${*:-none}; $(env | grep '^MVK_' | tr '\n' ' '))"
-    { echo "settings: ${*:-none}"; env | grep '^MVK_' || echo "MVK: defaults"; } > "$out/settings.txt"
+    { echo "settings: ${*:-none}"; env | grep '^MVK_' || echo "MVK: defaults"; env | grep '^SNX_'; } > "$out/settings.txt"
     ( cd "$GAME_DIR" && SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL="${MVK_CONFIG_LOG_LEVEL:-2}" \
         "./$GAME_ID" --seconds="$secs" --vk_gpu_profile=1 --shot="$out/last" "$@" ) > "$out/console.txt" 2>&1 &
     local game=$!
@@ -249,6 +251,26 @@ do_shaderprof() {
     grep "GPU   draw" "$d/game.log" | tail -40
 }
 
+# The player model's missing skin and eye colours: the game's indexed texture tables (a texture picked by a register
+# in the shader) read their table's first texture unless the shaders get texture arrays, which MoltenVK's reported
+# limits turn off. The same scene twice: as it is, then with the arrays forced on and MoltenVK logging what it does
+# with them (its compile errors show the Metal it made), each translated program's SPIR-V in local/spv-arrays. Each
+# run translates and makes the pipelines again (the arrays are in the shader cache's key), so they load slowly
+do_texdiag() {
+    local secs=${1:-60}
+    say "texdiag 1/2: indexed textures as now"
+    do_perf "$secs" || return 1
+    say "texdiag 2/2: indexed textures through texture arrays"
+    mkdir -p "$LOCAL/spv-arrays"
+    SNX_FORCE_TEXTURE_ARRAYS=1 SNX_SPV_DUMP="$LOCAL/spv-arrays" MVK_CONFIG_LOG_LEVEL=3 do_perf "$secs" || return 1
+    for d in $(ls -d "$LOGS"/perf-*/ | tail -2); do
+        echo "== $(basename "$d"): $(grep -o 'SNX_FORCE[^ ]*' "$d/settings.txt")"
+        grep "index texture tables\|indexed textures" "$d/game.log" | tail -2
+        echo "Metal compile errors: $(grep -c 'Shader library compile failed' "$d/console.txt")"
+        grep "perf:" "$d/game.log" | tail -2
+    done
+}
+
 # For Xcode: the game with Metal's capture layer on and no time limit. In Xcode, Debug > Attach to Process picks the
 # game (its name is its title ID), then the debug bar's Metal button captures a frame: its Performance view times
 # every draw and the shader profiler each line of the translated MSL. Instruments' Metal System Trace template
@@ -269,6 +291,7 @@ case "$cmd" in
     diag) logged diag do_diag "$@" ;;
     gpudiag) logged gpudiag do_gpudiag "$@" ;;
     shaderprof) logged shaderprof do_shaderprof "$@" ;;
+    texdiag) logged texdiag do_texdiag "$@" ;;
     capture) logged capture do_capture "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
     *) sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//' ;;

@@ -1898,7 +1898,7 @@ static struct {
         }                                                                                                              \
     } while (0)
 void vk_render_forget_state(void) { g_dyn.cb = 0; }
-u64 g_vk_drawn, g_vk_skipped;
+u64 g_vk_drawn, g_vk_skipped, g_vk_indexed_drawn;
 
 /* NVB197_SET_VIEWPORT_COORDINATE_SWIZZLE (0x0A18) can negate Y before the scale and offset. A negative Vulkan
    height implements the same mapping without changing texture coordinates or guest render-target contents.
@@ -3183,6 +3183,7 @@ retry:
     }
     vk_gpuprof_draw(vs ? vs->hash : 0, fs ? fs->hash : 0, indexed ? icount : count, instances);
     g_vk_drawn++;
+    if ((vs && vs->indexed) || (fs && fs->indexed)) g_vk_indexed_drawn++;
     if (vk_gpuprof_split()) vk_render_end(); /* SNX_DRAW_SPLIT: each draw timed as a pass of its own */
 }
 

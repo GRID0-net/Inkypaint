@@ -517,6 +517,8 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
         vk_buf_frame();
         vk_mem_trim(0, 0);
         if (g_vk_present % 600 == 0) {
+            LOG("vulkan: %llu draws index texture tables (%s)\n", (unsigned long long)g_vk_indexed_drawn,
+                g_shader_texture_arrays ? "through texture arrays" : "each reading its table's first texture");
             char cs_why[256];
             u64 cs_skipped = vk_cs_skipped(cs_why, sizeof cs_why);
             LOG("vulkan: %llu draws, %llu skipped; %llu dispatches in %llu batches (%llu ms waiting), %llu skipped%s; "
