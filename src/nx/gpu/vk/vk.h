@@ -1048,7 +1048,8 @@ extern u64 g_vk_fb_draws, g_vk_fb_barriers, g_vk_fb_restarts, g_vk_rt_copies;
 /* the Tracy GPU track's contexts, one per queue: the graphics queue's render passes, the compute queue's batches */
 #define VK_GPU_CTX_GRAPHICS 1
 #define VK_GPU_CTX_COMPUTE  2
-void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt);
+/* att_bytes: the pass's attachments' bytes, each loaded at its begin and stored at its end on a tiler */
+void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt, u64 att_bytes);
 void vk_gpuprof_pass_end(VkCommandBuffer cb);
 void vk_gpuprof_pass_end_site(const char* file, int line); /* the code that ended a pass, counted */
 void vk_gpuprof_frame_done(u32 slot);

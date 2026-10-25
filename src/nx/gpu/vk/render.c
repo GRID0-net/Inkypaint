@@ -185,7 +185,12 @@ static int render_begin(Surf** rt, Surf* zt, u32 n, int zt_ro, int srgb_write, u
                           .pColorAttachments = ca,
                           .pDepthAttachment = zt ? &za : NULL,
                           .pStencilAttachment = zt && zt->f.stencil ? &za : NULL};
-    vk_gpuprof_pass_begin(cb, n ? rt[0] : NULL, zt);
+    {
+        u64 att = zt ? (u64)zt->f.bpp * zt->sw * zt->sh * layers : 0;
+        for (u32 i = 0; i < n; i++)
+            if (rt[i]) att += (u64)rt[i]->f.bpp * rt[i]->sw * rt[i]->sh * layers;
+        vk_gpuprof_pass_begin(cb, n ? rt[0] : NULL, zt, att);
+    }
     rec_CmdBeginRendering(cb, &ri);
     memcpy(g_rp.rt, rt, sizeof g_rp.rt);
     g_rp.zt = zt;
@@ -222,7 +227,7 @@ static int render_begin_empty(void) {
     vk_render_end();
     VkExtent2D ext = {g_vk.props.limits.maxFramebufferWidth, g_vk.props.limits.maxFramebufferHeight};
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, ext}, .layerCount = 1};
-    vk_gpuprof_pass_begin(vk_cmd(), NULL, NULL);
+    vk_gpuprof_pass_begin(vk_cmd(), NULL, NULL, 0);
     rec_CmdBeginRendering(vk_cmd(), &ri);
     memset(g_rp.rt, 0, sizeof g_rp.rt);
     g_rp.zt = NULL;

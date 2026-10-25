@@ -22,6 +22,7 @@
 
 typedef struct {
     u64 gva;
+    u64 att_bytes; /* its attachments' bytes */
     u32 w, h, fmt, draws;
     u32 xfers, barriers, dispatches; /* recorded since the pass before it ended: what the gap before it holds */
     u32 kind[3];
@@ -101,7 +102,7 @@ static GpSlot* gp_slot(void) {
     return g_slot[s];
 }
 /* before vkCmdBeginRendering, outside any pass: the reset of the slot's pool if this is its first pass since recycled */
-void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt) {
+void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt, u64 att_bytes) {
     GpSlot* g;
     if (!gp_on() || !(g = gp_slot())) return;
     if (!g->reset) {
@@ -116,6 +117,7 @@ void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt) {
     const Surf* s = rt ? rt : zt;
     GpPass* p = &g->pass[g->used / 2];
     p->gva = s ? s->gva : 0;
+    p->att_bytes = att_bytes;
     p->w = s ? s->w : 0;
     p->h = s ? s->h : 0;
     p->fmt = s ? (u32)s->f.vk : 0;
@@ -182,6 +184,13 @@ static int site_cmp(const void* a, const void* b) {
     u64 x = ((const GpSite*)a)->n, y = ((const GpSite*)b)->n;
     return x < y ? 1 : x > y ? -1 : 0;
 }
+/* the last frame's passes, in order: for the report's list of the costliest target's passes */
+typedef struct {
+    u64 gva, att_bytes, ns, gap_ns;
+    u32 draws, xfers, barriers;
+} GpLast;
+static GpLast g_last[GP_QUERIES / 2];
+static u32 g_nlast;
 static void gp_report(void);
 static GpKey* gp_key(const GpPass* p) {
     u64 h = (p->gva >> 8) ^ ((u64)p->w << 40) ^ ((u64)p->h << 20) ^ p->fmt;
@@ -245,8 +254,12 @@ void vk_gpuprof_frame_done(u32 slot) {
     }
 #endif
     double period = g_vk.props.limits.timestampPeriod;
+    g_nlast = 0;
     for (u32 i = 0; i + 1 < g->used; i += 2) {
         u64 ns = (u64)((double)(ts[i + 1] - ts[i]) * period);
+        g_last[g_nlast++] = (GpLast){g->pass[i / 2].gva, g->pass[i / 2].att_bytes, ns,
+                                     i ? (u64)((double)(ts[i] - ts[i - 1]) * period) : 0, g->pass[i / 2].draws,
+                                     g->pass[i / 2].xfers, g->pass[i / 2].barriers};
         GpKey* k = gp_key(&g->pass[i / 2]);
         g_pass_ns += ns;
         if (!k) continue;
@@ -341,6 +354,16 @@ static void gp_report(void) {
             f ? f + 1 : g_site[i].file, g_site[i].line);
     }
     memset(g_site, 0, sizeof g_site);
+    /* the costliest target's passes in the last frame: whether its time is a few heavy passes (their draws) or many
+       light ones (each loading and storing its attachments) */
+    for (u32 i = 0, shown = 0; sorted[0].passes && i < g_nlast && shown < 40; i++)
+        if (g_last[i].gva == sorted[0].gva) {
+            LOG("vulkan: GPU     pass %u: %.2f ms, %u draws, %.1f MB of attachments, after a %.2f ms gap (%u copies, %u "
+                "barriers)\n",
+                i, (double)g_last[i].ns / 1e6, g_last[i].draws, (double)g_last[i].att_bytes / 1048576.0,
+                (double)g_last[i].gap_ns / 1e6, g_last[i].xfers, g_last[i].barriers);
+            shown++;
+        }
     memset(g_key, 0, sizeof g_key);
     g_pass_ns = g_span_ns = g_frames = g_lost = 0;
 }
