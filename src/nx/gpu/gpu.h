@@ -246,6 +246,9 @@ int gmem_write(u64 gva, const void* src, u64 size);
    hooks once over the span the runs fall in (gmem_need before reading it, gmem_before_write before writing it and
    gpu_mem_written after), then the runs without them */
 void gmem_need(u64 gva, u64 size);
+/* 1 when gmem_need(gva, size) has nothing to land: no pending result of the renderer may cover the range. Then no part
+   of it has any either, so its bytes can be read in pieces without a gmem_need for each */
+int gmem_quiet(u64 gva, u64 size);
 void gmem_read_raw(u64 gva, void* dst, u64 size);
 void gmem_before_write(u64 gva, u64 size);
 void gmem_write_raw(u64 gva, const void* src, u64 size);

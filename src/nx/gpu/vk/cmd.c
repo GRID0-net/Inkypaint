@@ -10,6 +10,7 @@
 #include <string.h>
 #include "nx/runtime/platform/log.h"
 #include "nx/gpu/gpu.h"
+#include "nx/memory/own.h"
 #include "nx/gpu/vk/vk.h"
 #include "nx/runtime/platform/plat.h"
 #include "common/utilities/common.h"
@@ -105,11 +106,26 @@ u64 vk_sample_hash(u64 gva, u64 len) {
         return vk_hash(tmp, len);
     }
     u32 n = 0;
+    u64 step = (len - 32) / 62;
+    /* the range one run of host memory, nothing of it held by the GPU and no result pending over it: the 64 samples
+       are read in place, the bytes vk_guest_peek would copy. Peeking each one looked up pending results and walked
+       the GPU's page table 64 times, a tenth of a game's GPU thread where nothing traps writes (macOS) */
+    const u8* host =
+        !__atomic_load_n(&g_own_any, __ATOMIC_ACQUIRE) && gmem_quiet(gva, len) ? gmem_host(gva, len) : NULL;
+    if (host) {
+        memcpy(tmp, host, 64);
+        memcpy(tmp + 64, host + len - 64, 64);
+        n = 128;
+        for (int i = 0; i < 62; i++) {
+            memcpy(tmp + n, host + (u64)i * step, 32);
+            n += 32;
+        }
+        return vk_hash(tmp, n);
+    }
     vk_guest_peek(gva, tmp, 64);
     n = 64;
     vk_guest_peek(gva + len - 64, tmp + n, 64);
     n += 64;
-    u64 step = (len - 32) / 62;
     for (int i = 0; i < 62; i++) {
         vk_guest_peek(gva + (u64)i * step, tmp + n, 32);
         n += 32;

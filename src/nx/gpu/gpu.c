@@ -86,6 +86,10 @@ void gmem_read_raw(u64 gva, void* dst, u64 size) { copy_runs(gva, (u8*)dst, NULL
 void gmem_write_raw(u64 gva, const void* src, u64 size) { copy_runs(gva, NULL, (const u8*)src, size); }
 /* whether anything the renderer holds may cover [gva, gva + size): one lookup where each hook below makes its own */
 static int mem_pending(u64 gva, u64 size) { return !g_renderer->mem_pending || g_renderer->mem_pending(gva, size); }
+int gmem_quiet(u64 gva, u64 size) {
+    if (!(__atomic_load_n(&g_gpu_releases, __ATOMIC_ACQUIRE) || g_cs_any || g_gfx_any || g_gfx_img_any)) return 1;
+    return !mem_pending(gva, size);
+}
 void gmem_need(u64 gva, u64 size) {
     if ((__atomic_load_n(&g_gpu_releases, __ATOMIC_ACQUIRE) || g_cs_any || g_gfx_any || g_gfx_img_any) &&
         !mem_pending(gva, size))
