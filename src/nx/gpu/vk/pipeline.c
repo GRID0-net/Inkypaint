@@ -273,11 +273,15 @@ void vk_pipeline_init(void) {
         buffer_slots -= image_slots;
         if (buffer_slots > SNX_VKB_TEXARRAY - SNX_VKB_IMGBUF) buffer_slots = SNX_VKB_TEXARRAY - SNX_VKB_IMGBUF;
         g_vk_buffer_image_slots = buffer_slots;
-        /* A compact array holds the unique handles selected by all indexed tables. */
-        if (g_vk.props.limits.maxPerStageDescriptorSamplers < SH_MAXTEX + 2 * SNX_TEX_ARRAY ||
-            g_vk.props.limits.maxPerStageDescriptorSampledImages < SH_MAXTEX + 2 * SNX_TEX_ARRAY ||
-            g_vk.props.limits.maxDescriptorSetSamplers < 5 * (SH_MAXTEX + 2 * SNX_TEX_ARRAY) ||
-            g_vk.props.limits.maxDescriptorSetSampledImages < 5 * (SH_MAXTEX + 2 * SNX_TEX_ARRAY))
+        /* A compact array holds the unique handles selected by all indexed tables. SNX_FORCE_TEXTURE_ARRAYS keeps
+           them past the limits, to test a driver that reports less than it binds: MoltenVK says 16 samplers a stage
+           while its Metal argument buffers hold far more. Without the arrays, an indexed handle reads its table's
+           first element whatever the index */
+        if ((g_vk.props.limits.maxPerStageDescriptorSamplers < SH_MAXTEX + 2 * SNX_TEX_ARRAY ||
+             g_vk.props.limits.maxPerStageDescriptorSampledImages < SH_MAXTEX + 2 * SNX_TEX_ARRAY ||
+             g_vk.props.limits.maxDescriptorSetSamplers < 5 * (SH_MAXTEX + 2 * SNX_TEX_ARRAY) ||
+             g_vk.props.limits.maxDescriptorSetSampledImages < 5 * (SH_MAXTEX + 2 * SNX_TEX_ARRAY)) &&
+            !getenv("SNX_FORCE_TEXTURE_ARRAYS"))
             g_shader_texture_arrays = 0;
         for (i = 0; i < SNX_VKB_END; i++) {
             int image = i >= SNX_VKB_IMG && i < SNX_VKB_RS;
@@ -317,6 +321,8 @@ void vk_pipeline_init(void) {
                  l->maxPerStageDescriptorUniformBuffers, l->maxPerStageDescriptorStorageBuffers,
                  l->maxPerStageDescriptorSamplers, l->maxPerStageDescriptorStorageImages);
     }
+    LOG("vulkan: indexed textures %s\n", g_shader_texture_arrays ? "through texture arrays"
+                                                                   : "read as their table's first texture (no arrays)");
     g_vk_playout = vk_playout(0);
     if (!g_vk_playout) fatal("vulkan: cannot create shader pipeline layout");
     snprintf(g_cache_dir, sizeof g_cache_dir, "%sshader_cache", g_cachedir);
