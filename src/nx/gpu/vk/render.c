@@ -35,9 +35,10 @@ static struct {
 } g_rp;
 u64 g_vk_fb_draws, g_vk_fb_barriers, g_vk_fb_restarts, g_vk_rt_copies;
 
-void vk_render_end(void) {
+void vk_render_end_at(const char* file, int line) {
     if (!g_rp.open) return;
     g_rp.open = 0;
+    vk_gpuprof_pass_end_site(file, line);
     VkCommandBuffer cb = vk_cmd();
     vk_query_pass_end(cb); /* a query begun in the pass ends in it */
     rec_CmdEndRendering(cb);

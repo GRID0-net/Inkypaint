@@ -15,7 +15,9 @@
 #include "nx/runtime/platform/log.h"
 #include "nx/runtime/platform/plat.h"
 
-#define GP_QUERIES 8192 /* timestamps per frame slot: two per pass */
+/* timestamps per frame slot: two per pass. MoltenVK backs a pool with a Metal counter sample buffer of at most 32 KiB
+   (4096 stamps) and falls back to stamps of the CPU's clock, all of them 0 ms apart, for a larger one */
+#define GP_QUERIES 4096
 #define GP_KEYS    1024 /* targets summed over 600 presents */
 
 typedef struct {
@@ -154,6 +156,31 @@ void vk_gpuprof_pass_end(VkCommandBuffer cb) {
     /* the end goes out whenever the begin did: a dropped pair never reaches the server apart */
     if (p->q0) p->q1 = snx_tracy_gpu_zone_end(p->q0, VK_GPU_CTX_GRAPHICS, p->ep);
 #endif
+}
+/* the code that ended passes (vk_render_end's call sites), counted until the next report */
+#define GP_SITES 96
+typedef struct {
+    const char* file;
+    int line;
+    u64 n;
+} GpSite;
+static GpSite g_site[GP_SITES];
+void vk_gpuprof_pass_end_site(const char* file, int line) {
+    if (!gp_on()) return;
+    for (u32 i = 0; i < GP_SITES; i++) {
+        if (!g_site[i].file) {
+            g_site[i].file = file;
+            g_site[i].line = line;
+        }
+        if (g_site[i].file == file && g_site[i].line == line) {
+            g_site[i].n++;
+            return;
+        }
+    }
+}
+static int site_cmp(const void* a, const void* b) {
+    u64 x = ((const GpSite*)a)->n, y = ((const GpSite*)b)->n;
+    return x < y ? 1 : x > y ? -1 : 0;
 }
 static void gp_report(void);
 static GpKey* gp_key(const GpPass* p) {
@@ -301,6 +328,13 @@ static void gp_report(void) {
             (double)sorted[i].ns / 1e6 / (double)g_frames, (unsigned long long)sorted[i].passes,
             (unsigned long long)sorted[i].draws, (unsigned long long)sorted[i].gva, sorted[i].w, sorted[i].h,
             sorted[i].fmt);
+    qsort(g_site, GP_SITES, sizeof *g_site, site_cmp);
+    for (int i = 0; i < 16 && g_site[i].n; i++) {
+        const char* f = strrchr(g_site[i].file, '/');
+        LOG("vulkan: GPU   %.1f passes a frame ended at %s:%d\n", (double)g_site[i].n / (double)g_frames,
+            f ? f + 1 : g_site[i].file, g_site[i].line);
+    }
+    memset(g_site, 0, sizeof g_site);
     memset(g_key, 0, sizeof g_key);
     g_pass_ns = g_span_ns = g_frames = g_lost = 0;
 }

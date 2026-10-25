@@ -971,7 +971,10 @@ extern u64 g_vk_cs_cpu_reads; /* dispatches kept on the compute queue because th
 u64 vk_cs_skipped(char* why, size_t size);
 
 /* render.c */
-void vk_render_end(void); /* ends the dynamic rendering pass, if one is open */
+/* ends the dynamic rendering pass, if one is open. The call site is counted under vk_gpu_profile (gpuprof.c), as each
+   end and the next begin cost a tiler GPU a store and a load of every target */
+void vk_render_end_at(const char* file, int line);
+#define vk_render_end() vk_render_end_at(__FILE__, __LINE__)
 /* the on-screen controls and the game's menu over a swapchain image in TRANSFER_DST_OPTIMAL, which it stays in;
    safe is the picture's part clear of the system's bars (gpu/vk/ui.c) */
 void vk_ui_draw(VkCommandBuffer cb, VkImage sc, const int safe[4]);
@@ -1034,6 +1037,7 @@ extern u64 g_vk_fb_draws, g_vk_fb_barriers, g_vk_fb_restarts, g_vk_rt_copies;
 #define VK_GPU_CTX_COMPUTE  2
 void vk_gpuprof_pass_begin(VkCommandBuffer cb, const Surf* rt, const Surf* zt);
 void vk_gpuprof_pass_end(VkCommandBuffer cb);
+void vk_gpuprof_pass_end_site(const char* file, int line); /* the code that ended a pass, counted */
 void vk_gpuprof_frame_done(u32 slot);
 /* the device's timestamps next to the client's clock (VK_EXT_calibrated_timestamps with a host time domain) */
 int vk_gpuprof_calibrated(void);
