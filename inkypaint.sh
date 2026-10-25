@@ -11,6 +11,7 @@
 #   ./inkypaint.sh run [secs] [--KEY=VALUE...]  run the game (default: until you close it), screenshot at the end
 #   ./inkypaint.sh perf [secs] [--KEY=VALUE...] a measured run: frame rate, GPU time, memory, threads, call stacks
 #   ./inkypaint.sh diag [secs]  three measured runs that narrow down the rendering bugs (about 6 minutes)
+#   ./inkypaint.sh gpudiag [secs] three measured runs that split the GPU's time: fast math, half resolution
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
 # Everything the game is made of stays in this folder: local/ (extraction, the recompiled game, its saves and logs)
@@ -216,6 +217,24 @@ do_diag() {
     MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 do_perf "$secs" || return 1
 }
 
+# Where the GPU's time goes once the CPU keeps up: the same scene three ways, each a measured run. Fast math shows
+# whether Metal's precise math (MoltenVK turns fast math off for any shader that asks to preserve infinities and NaNs,
+# which every translated one does) is the cost; half resolution whether the pixels are
+do_gpudiag() {
+    local secs=${1:-60}
+    say "gpudiag 1/3: as it is"
+    do_perf "$secs" || return 1
+    say "gpudiag 2/3: Metal fast math"
+    MVK_CONFIG_FAST_MATH_ENABLED=1 do_perf "$secs" || return 1
+    say "gpudiag 3/3: half the 3D resolution"
+    do_perf "$secs" --resolution=0.5 || return 1
+    for d in $(ls -d "$LOGS"/perf-*/ | tail -3); do
+        echo "== $(basename "$d"): $(head -1 "$d/settings.txt") $(grep MVK_ "$d/settings.txt" | tr '\n' ' ')"
+        grep "GPU over" "$d/game.log" | tail -1
+        grep "perf:" "$d/game.log" | tail -3
+    done
+}
+
 cmd=${1:-help}; shift || true
 case "$cmd" in
     doctor) logged doctor do_doctor ;;
@@ -225,6 +244,7 @@ case "$cmd" in
     run) logged run do_run "$@" ;;
     perf) logged perf do_perf "$@" ;;
     diag) logged diag do_diag "$@" ;;
+    gpudiag) logged gpudiag do_gpudiag "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
-    *) sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) sed -n '4,22p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac
