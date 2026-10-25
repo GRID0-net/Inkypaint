@@ -227,6 +227,15 @@ setting JIT threads
     words Auto|#
     help Threads compiling the code the recompiler missed: 0 = every CPU the game may use but two (at most 8).
     help They yield to the game
+setting GPU timestamps
+    key gpu_timestamps
+    int 0 1
+    default 1
+    words When processed|When submitted
+    help The time the game's GPU timestamps carry. 0 = when the GPU thread reaches them, so a frame's GPU time is how long
+    help this computer took to decode its commands. 1 = when the game submitted their commands, as a GPU that kept up
+    help would stamp them. A game that scales its resolution by its GPU time (one does, every frame) keeps its full
+    help resolution with 1 instead of shrinking it for time the renderer spends on the CPU
 setting JIT optimization
     key jit_opt
     text 2

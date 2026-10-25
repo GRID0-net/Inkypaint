@@ -37,6 +37,7 @@
 #include "nx/gpu/renderer.h"
 #include "nx/hle/services/nvdrv.h"
 #include "nx/memory/mem.h"
+#include "nx/runtime/clock.h"
 #include "nx/runtime/platform/log.h"
 #include "nx/runtime/platform/plat.h"
 #include "nx/runtime/platform/tracy.h"
@@ -648,6 +649,7 @@ struct GpuItem {
     u32 n, pf;        /* the entries, and those before the first SYNC entry, fetched at submission into words */
     u32 entry, word;  /* where the stream goes on */
     int started;
+    u64 submit_ns;    /* the guest time the game submitted it (gpu_timestamps) */
     u32* late;        /* the entries the GPU thread fetched: [late_first, late_end) */
     u32 late_cap, late_first, late_end;
 };
@@ -742,6 +744,7 @@ static void job_end(const GpuItem* j, GpuChannel* ch) {
 static int run_job(GpuItem* j) {
     GpuChannel* ch = g_gpu.chan[j->chan];
     ch->dma_job_id = j->id;
+    g_gpu_job_submit_ns = j->submit_ns;
     if (!j->started) {
         j->started = 1;
         ch->dma_launch_index = 0;
@@ -1122,6 +1125,7 @@ void gpu_submit(const void* entries, u32 n, u32 channel, u32 incs, u32 wait_id, 
     j->wait_id = wait_id;
     j->wait_val = wait_val;
     j->expect = expect;
+    j->submit_ns = guest_ns();
     pm_lock(&g_qlk);
     queue_init();
     stale = !g_gpu.chan[channel] || g_scan_stale[channel];

@@ -12,6 +12,7 @@
    method indices (byte offset / 4) */
 #include "nx/gpu/maxwell/engines_int.h"
 #include "nx/gpu/maxwell/maxwell_3d_regs.h"
+#include "nx/runtime/options.h"
 
 /* ------------------------------------------------------------ the file's state */
 /* the counter reports whose made-up values a render enable must not compare (MADEUP_N, madeup_*) */
@@ -55,10 +56,14 @@ static struct {
 #define GPU_TICKS_PER_NS_DEN 625u
 /* stamps step at least this many ns, more than one tick (625 / 384 ns), so that they strictly increase */
 #define GPU_TICK_MIN_STEP_NS 16u
-/* The timestamp a report or semaphore carries: the guest clock when the stream reaches it, as GPU ticks, past the
-   one before. sead compares them with the CPU's tick. It is not real GPU time */
+/* The timestamp a report or semaphore carries: the guest clock when the stream reaches it, or with gpu_timestamps
+   when its job was submitted, as GPU ticks, past the one before. sead compares them with the CPU's tick. It is not
+   real GPU time. Stamped when reached, the time between two stamps of a frame is the renderer's CPU time on its
+   commands, which a game scaling its resolution by GPU time takes for an overloaded GPU: it shrinks its targets, each
+   new size a new image here, while none of that time was spent on pixels */
+u64 g_gpu_job_submit_ns;
 u64 gpu_ticks(void) {
-    u64 ns = guest_ns();
+    u64 ns = g_settings.gpu_timestamps && g_gpu_job_submit_ns ? g_gpu_job_submit_ns : guest_ns();
     if (ns < g_engines.last_tick_ns + GPU_TICK_MIN_STEP_NS) ns = g_engines.last_tick_ns + GPU_TICK_MIN_STEP_NS;
     g_engines.last_tick_ns = ns;
     return ns / GPU_TICKS_PER_NS_DEN * GPU_TICKS_PER_NS_NUM +

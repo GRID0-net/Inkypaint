@@ -342,6 +342,9 @@ extern void (*g_gpu_mapping_end)(void);
 
 /* ---- engines.c: the 3D engine's methods and the report semaphores */
 u64 gpu_ticks(void); /* the GPU's timestamp: 614.4 MHz ticks of the guest clock */
+/* the guest time the job the GPU thread runs was submitted (set by gpu.c), which the timestamps carry under the setting
+   gpu_timestamps; 0 before any */
+extern u64 g_gpu_job_submit_ns;
 /* draws that differ only in their instance are merged into one instanced draw while they come in. The merged draw
    is sent before anything that could see it is missing (another method, another channel, the stream's end) */
 void r3d_pending_flush(void);
