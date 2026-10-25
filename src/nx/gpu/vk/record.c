@@ -125,8 +125,73 @@ static void publish(void) {
     __atomic_store_n(&g_head, g_pending, __ATOMIC_SEQ_CST);
     wake();
 }
+/* A rendering pass's commands are held back while it is open (vk_rec_pass_open), in g_pass, and go into the ring when
+   it ends. Meanwhile commands for outside a pass that touch nothing the pass uses go into the ring directly
+   (vk_rec_hoist), so they come before it and it stays open: on a tiling GPU each pass end stores every attachment to
+   memory and the next begin loads them again, and one game's main target took 17 passes a frame that way, ended for
+   layout changes and copies of other targets. Packets build their pointers from their own address when they run, so
+   they move as they are. A pass of more than PASS_HOLD bytes is let go (pass_flush) and takes no more hoisting: the
+   recording thread would wait for it */
+#define PASS_HOLD (1ull << 20)
+static struct {
+    u8* buf;
+    u64 len, cap;
+    int on; /* 0: commands go to the ring, 1: to buf, 2: hoisting, to the ring in front of the pass */
+    u64 begin; /* 1 + the offset in buf of the pass's begin packet's arguments, 0 when it isn't held there */
+} g_pass;
+static void* rec_push(RecFn fn, u64 size);
+static void pass_flush(void) {
+    if (!g_pass.on) return;
+    g_pass.on = 0;
+    g_pass.begin = 0;
+    for (u64 at = 0; at < g_pass.len;) {
+        const RecHdr* h = (const RecHdr*)(g_pass.buf + at);
+        u64 n = h->size - sizeof(RecHdr);
+        memcpy(rec_push(h->fn, n), h + 1, n);
+        at += h->size;
+    }
+    g_pass.len = 0;
+    if (g_pending - g_published >= REC_PUBLISH) publish();
+}
+static void* pass_push(RecFn fn, u64 size) {
+    u64 need = (sizeof(RecHdr) + size + 15) & ~15ull;
+    if (g_pass.len + need > g_pass.cap) {
+        u64 cap = g_pass.cap ? g_pass.cap * 2 : 64ull << 10;
+        while (cap < g_pass.len + need) cap *= 2;
+        u8* b = realloc(g_pass.buf, cap);
+        if (!b) {
+            pass_flush();
+            return NULL;
+        }
+        g_pass.buf = b;
+        g_pass.cap = cap;
+    }
+    RecHdr* h = (RecHdr*)(g_pass.buf + g_pass.len);
+    h->fn = fn;
+    h->size = need;
+    g_pass.len += need;
+    return h + 1;
+}
+void vk_rec_pass_open(void) {
+    pass_flush();
+    if (g_rec > 0 && g_settings.pass_hoist) g_pass.on = 1;
+}
+void vk_rec_pass_close(void) { pass_flush(); }
+int vk_rec_hoist(int on) {
+    if (on && g_pass.on == 1) {
+        g_pass.on = 2;
+        return 1;
+    }
+    if (!on && g_pass.on == 2) g_pass.on = 1;
+    return 0;
+}
 /* room for a packet of size bytes of arguments, filled in and then made known by rec_commit */
 static void* rec_push(RecFn fn, u64 size) {
+    if (g_pass.on == 1) {
+        if (g_pass.len > PASS_HOLD) pass_flush(); /* the packets before are filled in: their callers are done */
+        void* p = g_pass.on == 1 ? pass_push(fn, size) : NULL;
+        if (p) return p;
+    }
     u64 need = (sizeof(RecHdr) + size + 15) & ~15ull, at = g_pending & (REC_CAP - 1);
     if (at + need > REC_CAP) { /* the packet doesn't fit before the end: the rest is skipped */
         u64 skip = REC_CAP - at;
@@ -156,7 +221,7 @@ static void rec_commit(void) {
 
 void vk_rec_sync(void) {
     if (g_rec <= 0) return;
-    vk_lock(); /* no command is added meanwhile */
+    vk_lock(); /* no command is added meanwhile. An open pass stays held: none of it is submitted before it ends */
     publish();
     while (__atomic_load_n(&g_tail, __ATOMIC_ACQUIRE) != g_pending) plat_yield();
     vk_unlock();
@@ -173,6 +238,7 @@ static void begin_run(const void* p) {
     VK_OK(vkBeginCommandBuffer(*(const VkCommandBuffer*)p, &bi));
 }
 void vk_rec_begin(VkCommandBuffer cb) {
+    pass_flush();
     g_rec_cb = cb;
     if (!rec_enabled()) {
         begin_run(&cb);
@@ -217,6 +283,7 @@ void vk_rec_submit(VkCommandBuffer cb, const VkSemaphoreSubmitInfo* w, u32 nw, c
     Submit x = {.cb = cb, .nw = nw, .ns = ns, .timeline = s[0].semaphore, .value = s[0].value};
     memcpy(x.w, w, nw * sizeof *w);
     memcpy(x.s, s, ns * sizeof *s);
+    pass_flush();
     g_rec_cb = VK_NULL_HANDLE;
     if (!rec_enabled()) {
         submit_run(&x);
@@ -252,6 +319,7 @@ static void present_queued(const void* p) {
 VkResult vk_rec_present(VkSwapchainKHR sc, u32 idx, VkSemaphore wait) {
     Present x = {sc, wait, idx};
     if (g_rec <= 0) return present_run(&x);
+    pass_flush();
     *(Present*)rec_push(present_queued, sizeof x) = x;
     publish();
     return vk_rec_present_result();
@@ -898,12 +966,27 @@ void rec_CmdBeginRendering(VkCommandBuffer cb, const VkRenderingInfo* ri) {
     u32 n = ri->colorAttachmentCount;
     RenderArgs* x = rec_push(rendering_run, REC_AL(sizeof *x) + (n + 2) * sizeof(VkRenderingAttachmentInfo));
     VkRenderingAttachmentInfo* a = (void*)((u8*)x + REC_AL(sizeof *x));
+    g_pass.begin = g_pass.on == 1 && (u8*)x >= g_pass.buf && (u8*)x < g_pass.buf + g_pass.len
+                       ? 1 + (u64)((u8*)x - g_pass.buf)
+                       : 0;
     *x = (RenderArgs){cb, ri->flags, ri->renderArea, ri->layerCount, ri->viewMask, n, !!ri->pDepthAttachment,
                       !!ri->pStencilAttachment};
     memcpy(a, ri->pColorAttachments, n * sizeof *a);
     if (ri->pDepthAttachment) a[n] = *ri->pDepthAttachment;
     if (ri->pStencilAttachment) a[n + 1] = *ri->pStencilAttachment;
     rec_commit();
+}
+
+/* the held pass begins by clearing attachment i (a color slot, or n for depth and n + 1 for stencil) to v instead of
+   loading it: 1 when it does */
+int vk_rec_pass_load_clear(u32 i, const VkClearValue* v) {
+    if (g_pass.on != 1 || !g_pass.begin) return 0;
+    const RenderArgs* x = (const RenderArgs*)(g_pass.buf + g_pass.begin - 1);
+    VkRenderingAttachmentInfo* a = (void*)((u8*)x + REC_AL(sizeof *x));
+    if (i > x->n + 1 || (i == x->n && !x->depth) || (i == x->n + 1 && !x->stencil) || !a[i].imageView) return 0;
+    a[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a[i].clearValue = *v;
+    return 1;
 }
 
 /* ------------------------------------------------------------ descriptor sets */

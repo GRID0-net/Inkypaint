@@ -1140,7 +1140,7 @@ static int can_blit(VkFormat f) {
 }
 /* the command buffer with s ready to be read from and t written to, by copies or blits */
 static VkCommandBuffer copy_begin(Surf* s, Surf* t) {
-    vk_render_end();
+    vk_render_out(s, t); /* in front of the open pass when it hasn't drawn to or read either: vk_render_unhoist after */
     VkCommandBuffer cb = vk_cmd();
     vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -1255,6 +1255,7 @@ static void tex_take_drawn(Surf* t) {
                 } else
                     copy_layers(cb, s, t, 0, 0, t->depth3d, t->w, t->h, 1);
                 mark_copied(s, t);
+                vk_render_unhoist();
                 continue;
             }
             /* A 3D block-linear texture can be built a Z slice at a time through 2D targets. The target may be
@@ -1281,6 +1282,7 @@ static void tex_take_drawn(Surf* t) {
                     if (z < ld) {
                         copy_layers(copy_begin(s, t), s, t, l, (u32)z, 1, lw, lh, 1);
                         mark_copied(s, t);
+                        vk_render_unhoist();
                         break;
                     }
                 }
@@ -1305,6 +1307,7 @@ static void tex_take_drawn(Surf* t) {
                     count = s->layers < t->layers - layer ? s->layers : t->layers - layer;
                 copy_layers(copy_begin(s, t), s, t, l, layer, count, lw, lh, 0);
                 mark_copied(s, t);
+                vk_render_unhoist();
                 break;
             }
             if (!t->bl) break;

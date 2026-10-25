@@ -32,7 +32,15 @@ static struct {
     /* feedback loops (feedback_order): the color slots in ATTACHMENT_FEEDBACK_LOOP_OPTIMAL, those of them written
        since the pass began or its last barrier, and those sampled since then */
     u32 fb, fb_written, fb_read;
+    /* hoisting (vk_render_out): the pass's serial, the nesting of hoists under way, the surfaces bound since the last
+       draw (stamped with the serial when it is recorded: a draw's textures are bound before its pass begins), and
+       no_hoist when more were bound than use holds */
+    u32 serial, hoist, nuse;
+    int no_hoist;
+    u32 drawn; /* draws and clears recorded in the pass: a clear before any is its attachments' load op */
+    Surf* use[64];
 } g_rp;
+u64 g_vk_hoisted, g_vk_clears_folded;
 u64 g_vk_fb_draws, g_vk_fb_barriers, g_vk_fb_restarts, g_vk_rt_copies;
 static int g_storage_dirty; /* global memory or an image written by a shader since the last full barrier */
 static int g_barrier_owed;  /* an ordering method deferred in the open pass (vk_render_defer_barrier) */
@@ -62,12 +70,85 @@ static void owed_barrier(VkCommandBuffer cb) {
 void vk_render_end_at(const char* file, int line) {
     if (!g_rp.open) return;
     g_rp.open = 0;
+    g_rp.hoist = 0;
+    vk_rec_hoist(0);
     vk_gpuprof_pass_end_site(file, line);
     VkCommandBuffer cb = vk_cmd();
     vk_query_pass_end(cb); /* a query begun in the pass ends in it */
     rec_CmdEndRendering(cb);
     vk_gpuprof_pass_end(cb);
     if (g_barrier_owed) owed_barrier(cb);
+    vk_rec_pass_close();
+}
+
+/* s may be touched in front of the open pass: neither its target nor read or written by one of its draws */
+static int hoist_ok(const Surf* s) {
+    if (!s) return 1;
+    if (s->pass_use == g_rp.serial) return 0;
+    if (g_rp.zt && (g_rp.zt == s || g_rp.zt->img == s->img)) return 0;
+    for (u32 i = 0; i < g_rp.n; i++)
+        if (g_rp.rt[i] && (g_rp.rt[i] == s || g_rp.rt[i]->img == s->img)) return 0;
+    return 1;
+}
+int vk_render_out(const Surf* a, const Surf* b) {
+    if (!g_rp.open) return 0;
+    if (!g_rp.no_hoist && hoist_ok(a) && hoist_ok(b) && (g_rp.hoist || vk_rec_hoist(1))) {
+        if (!g_rp.hoist) g_vk_hoisted++;
+        g_rp.hoist++;
+        return 1;
+    }
+    vk_render_end();
+    return 0;
+}
+/* a barrier on s for stage: one for a shader stage readies s for a draw (or a dispatch, which ends the pass itself),
+   and goes in front of the pass when it can. One for a copy or a clear is followed by that command, which has to be
+   outside the pass too: only in a hoist its caller began (copy_begin) */
+int vk_render_out_barrier(const Surf* s, VkPipelineStageFlags2 stage) {
+    const VkPipelineStageFlags2 shaders =
+        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT |
+        VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT | VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    if ((stage & ~shaders) && !g_rp.hoist) {
+        vk_render_end();
+        return 0;
+    }
+    return vk_render_out(s, NULL);
+}
+void vk_render_unhoist(void) {
+    if (g_rp.hoist && !--g_rp.hoist) vk_rec_hoist(0);
+}
+void vk_render_note_use(Surf* s) {
+    if (g_rp.hoist) return; /* a hoisted command's: before the pass */
+    if (g_rp.nuse == sizeof g_rp.use / sizeof *g_rp.use) {
+        g_rp.no_hoist = 1; /* the next draw's surfaces aren't all known: nothing more goes in front of this pass */
+        return;
+    }
+    g_rp.use[g_rp.nuse++] = s;
+}
+void vk_render_forget_surf(const Surf* s) {
+    for (u32 i = 0; i < g_rp.nuse; i++)
+        if (g_rp.use[i] == s) g_rp.use[i] = NULL;
+}
+/* a draw is recorded in the open pass: what was bound for it is the pass's now */
+static void draw_stamp(void) {
+    g_rp.drawn++;
+    for (u32 i = 0; i < g_rp.nuse; i++)
+        if (g_rp.use[i]) g_rp.use[i]->pass_use = g_rp.serial;
+    g_rp.nuse = 0;
+}
+/* a pass opens: its commands are held back so hoisted ones go before them */
+static void pass_open(void) {
+    g_rp.hoist = 0;
+    vk_rec_hoist(0);
+    if (!++g_rp.serial) g_rp.serial = 1;
+    g_rp.no_hoist = g_rp.nuse == sizeof g_rp.use / sizeof *g_rp.use;
+    g_rp.drawn = 0;
+    vk_rec_pass_open();
 }
 
 /* the targets the registers name, without opening anything */
@@ -189,6 +270,7 @@ static int render_begin(Surf** rt, Surf* zt, u32 n, int zt_ro, int srgb_write, u
         u64 att = zt ? (u64)zt->f.bpp * zt->sw * zt->sh * layers : 0;
         for (u32 i = 0; i < n; i++)
             if (rt[i]) att += (u64)rt[i]->f.bpp * rt[i]->sw * rt[i]->sh * layers;
+        pass_open();
         vk_gpuprof_pass_begin(cb, n ? rt[0] : NULL, zt, att);
     }
     rec_CmdBeginRendering(cb, &ri);
@@ -227,6 +309,7 @@ static int render_begin_empty(void) {
     vk_render_end();
     VkExtent2D ext = {g_vk.props.limits.maxFramebufferWidth, g_vk.props.limits.maxFramebufferHeight};
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, ext}, .layerCount = 1};
+    pass_open();
     vk_gpuprof_pass_begin(vk_cmd(), NULL, NULL, 0);
     rec_CmdBeginRendering(vk_cmd(), &ri);
     memset(g_rp.rt, 0, sizeof g_rp.rt);
@@ -499,6 +582,7 @@ void vk_render_clear(GpuChannel* ch, u32 v) {
                 memcpy(at[na].clearValue.color.float32, cc, 16);
             na++;
         } else {
+            g_rp.drawn++;
             if (clear_masked(slot, mask, cc, rect.rect, layer, ch->render_pred)) target_written(g_rp.rt[slot]);
         }
     }
@@ -514,9 +598,33 @@ void vk_render_clear(GpuChannel* ch, u32 v) {
     }
     if (na) {
         int color_clear = mask == 15 && slot < g_rp.n && g_rp.rt[slot];
-        pred_begin(vk_cmd(), ch->render_pred);
-        rec_CmdClearAttachments(vk_cmd(), na, at, 1, &rect);
-        pred_end(vk_cmd(), ch->render_pred);
+        /* Nothing drawn in the pass yet and the whole of it cleared: the pass begins by clearing instead of loading
+           (a tiler then reads nothing of the target from memory). A clear inside it is a draw of its own */
+        u32 left = na;
+        if (!g_rp.drawn && !ch->render_pred && layers == 1 && !rect.rect.offset.x && !rect.rect.offset.y &&
+            rect.rect.extent.width == g_rp.ext.width && rect.rect.extent.height == g_rp.ext.height) {
+            left = 0;
+            for (u32 k = 0; k < na; k++) {
+                int folded = 1;
+                if (at[k].aspectMask & VK_IMAGE_ASPECT_COLOR_BIT)
+                    folded = vk_rec_pass_load_clear(at[k].colorAttachment, &at[k].clearValue);
+                else {
+                    if (folded && (at[k].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT))
+                        folded = vk_rec_pass_load_clear(g_rp.n, &at[k].clearValue);
+                    if (folded && (at[k].aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT))
+                        folded = vk_rec_pass_load_clear(g_rp.n + 1, &at[k].clearValue);
+                }
+                if (!folded) at[left++] = at[k];
+                else
+                    g_vk_clears_folded++;
+            }
+        }
+        if (left) {
+            g_rp.drawn++;
+            pred_begin(vk_cmd(), ch->render_pred);
+            rec_CmdClearAttachments(vk_cmd(), left, at, 1, &rect);
+            pred_end(vk_cmd(), ch->render_pred);
+        }
         /* a predicated clear may not run: it covers no target whole */
         if (color_clear) {
             Surf* s = g_rp.rt[slot];
@@ -3043,6 +3151,7 @@ retry:
         rec_CmdBindTransformFeedbackBuffersEXT(cb, 0, xcount, xbuf, xoff, xsize);
         rec_CmdBeginTransformFeedbackEXT(cb, 0, xcount, from, counter_offs);
     }
+    draw_stamp();
     pred_begin(cb, ch->render_pred);
     if (indexed) {
         rec_CmdBindIndexBuffer(cb, ibuf, ioff, itype);

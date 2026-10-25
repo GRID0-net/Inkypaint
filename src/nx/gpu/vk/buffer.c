@@ -1820,11 +1820,13 @@ static int make_own_(u32 i, VkBuffer sb, u64 so) {
     if (vmaCreateBuffer(g_vk.vma, &bci, &aci, &b, &m, NULL) != VK_SUCCESS) return 0;
     vk_mem_track(m);
     if (copy_stats_on()) g_copy_owned += len;
-    vk_render_end(); /* copies happen outside rendering passes */
+    /* copies happen outside rendering passes: this one into a buffer no draw has seen, in front of an open pass */
+    int out = vk_render_out(NULL, NULL);
     VkBufferCopy r = {so, 0, len};
     rec_CmdCopyBuffer(vk_cmd(), sb, b, 1, &r);
     copy_barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                  VK_ACCESS_2_MEMORY_READ_BIT);
+    if (out) vk_render_unhoist();
     drop_own(i);
     e->own = 1;
     e->buf = b;

@@ -236,6 +236,13 @@ setting GPU timestamps
     help this computer took to decode its commands. 1 = when the game submitted their commands, as a GPU that kept up
     help would stamp them. A game that scales its resolution by its GPU time (one does, every frame) keeps its full
     help resolution with 1 instead of shrinking it for time the renderer spends on the CPU
+setting Pass hoist
+    key pass_hoist
+    int 0 1
+    default 1
+    help Copies and layout changes that touch nothing an open rendering pass draws to or has read go in front of the
+    help pass instead of ending it. On a tiling GPU (Apple's) every pass end stores all its targets to memory and the
+    help next begin loads them again. 0 ends the pass for each, as before
 setting JIT optimization
     key jit_opt
     text 2

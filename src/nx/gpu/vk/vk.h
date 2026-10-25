@@ -248,6 +248,15 @@ VkResult vk_rec_present_result(void);
    written on the recording thread, a stand-in handle until then (vk_lock) */
 VkDescriptorSet vk_rec_new_set(VkDescriptorSetLayout layout, u32 n, const VkWriteDescriptorSet* w);
 void vk_rec_frame_reset(u32 slot); /* the slot's new sets are done with: its pools are reset in order */
+/* a rendering pass opens: its commands are held back until vk_rec_pass_close, so commands hoisted meanwhile
+   (vk_rec_hoist(1) ... vk_rec_hoist(0)) go before it. 1 from vk_rec_hoist(1) when they do (not with the commands
+   recorded at once, or after a sync let the pass go) */
+void vk_rec_pass_open(void);
+void vk_rec_pass_close(void);
+int vk_rec_hoist(int on);
+/* the held pass begins by clearing attachment i (color slot i; for depth the color count, for stencil one more) to v
+   instead of loading it: 1 when it does, while nothing was drawn in it (the caller knows) */
+int vk_rec_pass_load_clear(u32 i, const VkClearValue* v);
 u32 vk_rec_frame_sets(u32 slot);   /* new sets made in the slot since its reset */
 void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline pipe);
 void rec_CmdBindIndexBuffer(VkCommandBuffer cb, VkBuffer buf, VkDeviceSize off, VkIndexType type);
@@ -451,6 +460,7 @@ typedef struct Surf {
     /* depth targets: undefined but for draws and clears predicated on the GPU, which may not have run, so they count
        as no draw (render.c zt_written) */
     int pred_undefined;
+    u32 pass_use; /* render.c: the pass serial of the last draw that read or wrote it (vk_render_out) */
 } Surf;
 enum { VK_LRU_NONE, VK_LRU_TEX, VK_LRU_RT };
 /* resolution= in the .ini: render targets are made this much bigger (read once, at startup) */
@@ -976,6 +986,17 @@ u64 vk_cs_skipped(char* why, size_t size);
    end and the next begin cost a tiler GPU a store and a load of every target */
 void vk_render_end_at(const char* file, int line);
 #define vk_render_end() vk_render_end_at(__FILE__, __LINE__)
+/* The commands that follow, until vk_render_unhoist(), are for outside a rendering pass and touch surfaces a and b (or
+   neither, NULL; buffers only when made for them since the pass began). When the open pass neither renders to them
+   nor has a draw that read or wrote them, they go in front of it and it stays open (1): a tiler stores and loads every
+   attachment at each pass end and begin. Else the pass ends (0). Calls nest. vk_surf_use calls it for each barrier,
+   so a caller names what it copies between, and anything else ending the pass meanwhile ends it for real */
+int vk_render_out(const Surf* a, const Surf* b);
+int vk_render_out_barrier(const Surf* s, VkPipelineStageFlags2 stage); /* vk_surf_use's barriers */
+void vk_render_unhoist(void);
+void vk_render_note_use(Surf* s);         /* vk_surf_use: s is bound for the next draw */
+void vk_render_forget_surf(const Surf* s); /* s is freed */
+extern u64 g_vk_hoisted, g_vk_clears_folded; /* hoists, and clears made load ops: vk_gpu_profile logs them */
 /* The 3D engine's ordering methods (wait for idle, the fragment barrier, a data cache invalidate) inside an open pass.
    On a tiler GPU each ended pass stores every target and the next one loads them again: one game's 43 barriers a
    frame cost two thirds of its GPU time at 1080p. Within a pass, draws see each other's target writes in order

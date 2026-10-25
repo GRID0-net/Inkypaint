@@ -134,22 +134,25 @@ void vk_surf_use(VkCommandBuffer cb, Surf* s, VkImageLayout layout, VkPipelineSt
     int wrote = (s->access & (VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
                               VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
                               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)) != 0;
+    vk_render_note_use(s);
     if (s->layout == layout && !writes && !wrote) {
         /* read after read in the same layout needs no barrier, unless the reader is in a stage the barrier that made
            the last write visible didn't name (a copy after a blit read it): a barrier from the earlier readers
            extends that visibility to it */
         if (stage & ~s->stage) {
-            vk_render_end();
+            int out = vk_render_out_barrier(s, stage);
             vk_barrier(cb, s->img, vk_aspect(&s->f), s->stage ? s->stage : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                        layout, stage, access, layout);
+            if (out) vk_render_unhoist();
         }
         s->stage |= stage;
         s->access |= access;
         return;
     }
-    vk_render_end(); /* no barriers on images inside a rendering pass */
+    int out = vk_render_out_barrier(s, stage); /* no barriers on images inside a rendering pass: in front of it, or after */
     vk_barrier(cb, s->img, vk_aspect(&s->f), s->stage ? s->stage : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, s->access,
                s->layout, stage, access, layout);
+    if (out) vk_render_unhoist();
     s->layout = layout;
     s->stage = stage;
     s->access = access;
@@ -1135,6 +1138,7 @@ int vk_rt_drawn_in(u64 lo, u64 hi, Surf** out, int max) {
 /* a surface's image and views go when the frame being recorded is done (descriptors in it may name them) */
 static void surf_free(Surf* s) {
     g_vk_surf_epoch++;
+    vk_render_forget_surf(s);
     if (s->lru) {
         g_held[lru_kind(s)].n--;
         g_held[lru_kind(s)].bytes -= s->bytes;

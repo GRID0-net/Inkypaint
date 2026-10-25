@@ -346,6 +346,14 @@ static void gp_report(void) {
         LOG("vulkan: GPU   %.1f ordering methods a frame kept in their pass\n",
             (double)(g_vk_barriers_deferred - deferred_at) / (double)g_frames);
         deferred_at = g_vk_barriers_deferred;
+        static u64 hoisted_at;
+        LOG("vulkan: GPU   %.1f copies or layout changes a frame went in front of their pass\n",
+            (double)(g_vk_hoisted - hoisted_at) / (double)g_frames);
+        hoisted_at = g_vk_hoisted;
+        static u64 folded_at;
+        LOG("vulkan: GPU   %.1f clears a frame became their pass's load op\n",
+            (double)(g_vk_clears_folded - folded_at) / (double)g_frames);
+        folded_at = g_vk_clears_folded;
     }
     qsort(g_site, GP_SITES, sizeof *g_site, site_cmp);
     for (int i = 0; i < 16 && g_site[i].n; i++) {
