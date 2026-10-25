@@ -18,7 +18,7 @@
 #                             (each reads its table's first texture), then through texture arrays
 #   ./inkypaint.sh rtdump [frame] [split] [fill] one frame's rendering passes as pictures (frame 1500 by default,
 #                             about 25 s in; split: the full-size targets after every draw instead; fill: they start the
-#                             frame magenta, so what no draw writes shows),
+#                             frame magenta, so what no draw writes shows; cube: every cube texture's layers too),
 #                             into local/rtdump-<time> (the game's frame: it stays here)
 #   ./inkypaint.sh shadowdiag [secs] four short runs drawing the shadow maps differently (as now, the other front
 #                             face, no culling, four times the depth bias), a screenshot of each in logs/shadowdiag-<time>
@@ -281,15 +281,16 @@ do_texdiag() {
 # local/rtdump-<time>/index.txt naming each pass's targets and programs. The run ends a while after that frame
 do_rtdump() {
     local at=${1:-1500} split=0
-    local fill=0
+    local fill=0 tex=""
     for a in "${@:2}"; do
+        [ "$a" = cube ] && tex=cube
         [ "$a" = split ] && split=1
         [ "$a" = fill ] && fill=1
     done
     local out="$LOCAL/rtdump-$(stamp)"; mkdir -p "$out"
     local secs=$(( at / 60 + 20 ))
     say "frame $at's $([ $split = 1 ] && echo draws || echo passes) into local/$(basename "$out"), a $secs s run"
-    SNX_RT_DUMP="$out" SNX_RT_DUMP_AT="$at" SNX_RT_DUMP_SPLIT=$split SNX_RT_DUMP_FILL=$fill do_run "$secs" || return 1
+    SNX_RT_DUMP="$out" SNX_RT_DUMP_AT="$at" SNX_RT_DUMP_SPLIT=$split SNX_RT_DUMP_FILL=$fill SNX_RT_DUMP_TEX="$tex" do_run "$secs" || return 1
     local n=0
     for f in "$out"/*.ppm; do
         [ -f "$f" ] || continue

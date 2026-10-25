@@ -377,6 +377,9 @@ static int tex_upload_(Surf* t) {
     g_tex_upload_bytes += t->size;
     t->upload_valid = 0;
     t->wgen = ++g_tex_upload_gen; /* even a new texture at a reused address invalidates an old target's copy */
+    if (t->took_drawn)
+        LOG_LIMIT(20, "vulkan: texture %llx %ux%u (%u layers, %u levels) loaded from memory over the texels its targets "
+                      "drew\n", (unsigned long long)t->gva, t->w, t->h, t->layers, t->levels);
     t->took_drawn = 0;            /* memory's own texels again, until tex_take_drawn copies targets in */
     vk_surf_relist(t);
     vk_render_end();              /* copies and clears happen outside rendering passes */
@@ -1202,6 +1205,7 @@ static void tex_take_drawn(Surf* t) {
             n = 32;
         }
     }
+    int taken = 0;
     for (int i = 0; i < n; i++) {
         Surf* s = d[i];
         /* depth targets feed depth textures of the same host format, with their stencil when it has one (a depth
@@ -1307,6 +1311,7 @@ static void tex_take_drawn(Surf* t) {
                     count = s->layers < t->layers - layer ? s->layers : t->layers - layer;
                 copy_layers(copy_begin(s, t), s, t, l, layer, count, lw, lh, 0);
                 mark_copied(s, t);
+                taken++;
                 vk_render_unhoist();
                 break;
             }
@@ -1314,6 +1319,9 @@ static void tex_take_drawn(Surf* t) {
             lo += bl_level_size(t->w, t->h, 1, &t->f, t->bh, t->bd, l, NULL, NULL);
         }
     }
+    if (n && (t->type == VK_IMAGE_VIEW_TYPE_CUBE || t->type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY))
+        LOG_LIMIT(40, "vulkan: cube texture %llx %ux%u, %u layers, %u levels: %d targets drawn over it, %d copied in now\n",
+                  (unsigned long long)t->gva, t->w, t->h, t->layers, t->levels, n, taken);
     if (d != small) free(d);
 }
 Surf* vk_tex_from_tic(const u32* tic) {

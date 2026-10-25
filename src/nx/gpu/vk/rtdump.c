@@ -33,6 +33,7 @@ typedef struct {
     u32 w, h, pass, slot;
     u64 gva;
     u32 sw, sh, fmt;
+    u32 layer, level; /* a texture's subresource (SNX_RT_DUMP_TEX), else 0 */
 } RtdPic;
 
 static struct {
@@ -110,8 +111,48 @@ static void tex_add(RtdTex* list, u32* n, const RtdTex* t) {
             return;
     if (*n < RTD_TEXS) list[(*n)++] = *t;
 }
+static void rtd_take_sub(Surf* s, u32 slot, u32 layer, u32 level);
+/* SNX_RT_DUMP_TEX=address[,address] or cube: those textures (cube: every cube texture), as the dumped frame first
+   binds them, every layer (up to 24) of their first 4 levels. Addresses move from run to run */
+static void tex_dump(const Surf* bound) {
+    static u64 want[8], done[8];
+    static int nwant = -1, cubes;
+    static const Surf* cube_done[16];
+    static u32 ncube;
+    if (nwant < 0) {
+        nwant = 0;
+        const char* e = getenv("SNX_RT_DUMP_TEX");
+        cubes = e && strstr(e, "cube") != NULL;
+        if (cubes) e = NULL;
+        while (e && *e && nwant < 8) {
+            char* end;
+            want[nwant] = strtoull(e, &end, 16);
+            if (end == e) break;
+            nwant++;
+            e = *end == ',' ? end + 1 : end;
+        }
+    }
+    int pick = 0;
+    if (cubes && (bound->type == VK_IMAGE_VIEW_TYPE_CUBE || bound->type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY)) {
+        pick = 1;
+        for (u32 i = 0; i < ncube; i++) pick &= cube_done[i] != bound;
+        if (pick && ncube < 16) cube_done[ncube++] = bound;
+        else pick = 0;
+    }
+    for (int i = 0; i < nwant && !pick; i++)
+        if (!done[i] && want[i] == bound->gva) done[i] = pick = 1;
+    if (pick) {
+        if (g_rtd.index)
+            fprintf(g_rtd.index, "  texture %llx: %ux%u, %u layers, %u levels, view type %d, format %u, took drawn %d\n",
+                    (unsigned long long)bound->gva, bound->w, bound->h, bound->layers, bound->levels, (int)bound->type,
+                    (u32)bound->f.vk, bound->took_drawn);
+        for (u32 l = 0; l < bound->levels && l < 4; l++)
+            for (u32 k = 0; k < bound->layers && k < 24; k++) rtd_take_sub((Surf*)bound, 100, k, l);
+    }
+}
 void vk_rtdump_tex(int stage, int slot, const Surf* found, const Surf* bound) {
     if (!rtd_on()) return;
+    if (bound) tex_dump(bound);
     RtdTex t = {found, bound, stage, slot, bound ? bound->crop_gen : 0, found ? found->wgen : 0,
                 bound ? bound->took_drawn : 0};
     tex_add(g_rtd.next, &g_rtd.nnext, &t);
@@ -131,13 +172,17 @@ static int blittable(VkFormat f) {
 
 /* one color target as it is at the end of the pass */
 static void rtd_take(Surf* s, u32 slot) {
+    if (g_rtd.split && s && s->w < 1280) return; /* a picture a draw: the full-size targets alone, small */
+    rtd_take_sub(s, slot, 0, 0);
+}
+static void rtd_take_sub(Surf* s, u32 slot, u32 layer, u32 level) {
     if (g_rtd.npic == RTD_MAX || !s || s->f.depth || s->f.is_int || !blittable(s->f.vk)) return;
-    if (g_rtd.split && s->w < 1280) return; /* a picture a draw: the full-size targets alone, small */
+    u32 lw = s->sw >> level ? s->sw >> level : 1, lh = s->sh >> level ? s->sh >> level : 1;
     RtdPic* p = &g_rtd.pic[g_rtd.npic];
     memset(p, 0, sizeof *p);
     u32 most = g_rtd.split ? 480 : 960;
-    p->w = s->sw > most ? most : s->sw;
-    p->h = (u32)((u64)s->sh * p->w / (s->sw ? s->sw : 1));
+    p->w = lw > most ? most : lw;
+    p->h = (u32)((u64)lh * p->w / lw);
     if (!p->h) p->h = 1;
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                             .imageType = VK_IMAGE_TYPE_2D,
@@ -170,13 +215,15 @@ static void rtd_take(Surf* s, u32 slot) {
     p->sw = s->w;
     p->sh = s->h;
     p->fmt = (u32)s->f.vk;
+    p->layer = layer;
+    p->level = level;
     VkCommandBuffer cb = vk_cmd();
     vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
                 VK_ACCESS_2_TRANSFER_READ_BIT);
     vk_barrier(cb, p->img, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .srcOffsets = {{0, 0, 0}, {(i32)s->sw, (i32)s->sh, 1}},
+    VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, 1},
+                        .srcOffsets = {{0, 0, 0}, {(i32)lw, (i32)lh, 1}},
                         .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                         .dstOffsets = {{0, 0, 0}, {(i32)p->w, (i32)p->h, 1}}};
     rec_CmdBlitImage(cb, s->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, p->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
@@ -323,6 +370,10 @@ void vk_rtdump_present(void) {
         RtdPic* p = &g_rtd.pic[i];
         vmaInvalidateAllocation(g_vk.vma, p->buf_mem, 0, VK_WHOLE_SIZE);
         char path[1200];
+        if (p->slot >= 100)
+            snprintf(path, sizeof path, "%s/tex_%llx_layer%02u_level%u_%ux%u_f%u.ppm", g_rtd.dir,
+                     (unsigned long long)p->gva, p->layer, p->level, p->sw, p->sh, p->fmt);
+        else
         snprintf(path, sizeof path, "%s/%03u_%u_%llx_%ux%u_f%u.ppm", g_rtd.dir, p->pass, p->slot,
                  (unsigned long long)p->gva, p->sw, p->sh, p->fmt);
         written += rtd_write(p, path);
