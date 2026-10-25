@@ -277,6 +277,7 @@ static int create_device(void) {
     g_vk_preserve_infnan = p12.shaderSignedZeroInfNanPreserveFloat32 != 0;
     /* MoltenVK fails every pipeline that lists VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE (Metal's dynamic stride) */
     g_vk.has_dynamic_stride = p12.driverID != VK_DRIVER_ID_MOLTENVK;
+    g_vk.is_moltenvk = p12.driverID == VK_DRIVER_ID_MOLTENVK;
     g_vk_preserve_infnan64 = p12.shaderSignedZeroInfNanPreserveFloat64 != 0;
     /* 32 bit alone: a device whose denorm modes can't differ per width would need 16 and 64 bit declared too.
        Qualcomm's driver claims the mode but miscompiles with it: a fragment shader of one game's waterfalls, all of
@@ -508,6 +509,13 @@ static int create_device(void) {
         g_vk.has_feedback && has_feedback_dynamic && qloop_dyn.attachmentFeedbackLoopDynamicState;
     g_vk.has_local_read = g_vk.has_feedback && g_vk.has_local_read && qlocal.dynamicRenderingLocalRead;
     g_shader_maximal_reconvergence = has_reconvergence && qreconv.shaderMaximalReconvergence;
+    /* MoltenVK: structured programs reconverge at their merges on Apple's GPUs. The dispatch loop it took instead
+       for every fragment program with branches and derivatives made one game's fragment work scale with its pixels
+       at a fraction of the GPU's speed. SNX_NO_STRUCTURED_RECONVERGENCE keeps the loop, to compare */
+    g_shader_structured_reconverges = !g_shader_maximal_reconvergence && g_vk.is_moltenvk &&
+                                      !getenv("SNX_NO_STRUCTURED_RECONVERGENCE");
+    if (g_shader_structured_reconverges)
+        LOG("vulkan: programs whose lanes reconverge are written structured (MoltenVK reconverges at merges)\n");
     g_shader_clock_scopes =
         has_shader_clock ? (qclock.shaderSubgroupClock ? 1 : 0) | (qclock.shaderDeviceClock ? 2 : 0) : 0;
     g_vk.has_divisor = g_vk.has_divisor && fdiv.vertexAttributeInstanceRateDivisor;

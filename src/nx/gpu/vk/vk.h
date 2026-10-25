@@ -82,6 +82,7 @@ typedef struct {
     VkPhysicalDeviceFeatures feat;
     int has_divisor;      /* VK_EXT_vertex_attribute_divisor: instance divisors above 1 */
     int has_dynamic_stride; /* a binding's stride is dynamic state, which MoltenVK refuses: a pipeline holds it then */
+    int is_moltenvk;        /* the driver is MoltenVK (Metal underneath): its quirks and its reconvergence */
     int has_calibrated_host; /* VK_EXT_calibrated_timestamps with CLOCK_MONOTONIC_RAW: the GPU's clock goes next to
                                 the client's, one driver call (gpuprof.c's calibration) */
     int has_xfb;          /* VK_EXT_transform_feedback: draws capture their outputs into guest memory */

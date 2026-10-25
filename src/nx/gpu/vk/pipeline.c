@@ -1466,6 +1466,7 @@ static void pf_key(char* out, size_t n, size_t* guest) {
                   (u32)g_shader_float16,
                   (u32)g_shader_tessellation,
                   (u32)g_shader_clock_scopes,
+                  (u32)g_shader_structured_reconverges,
                   (u32)g_vk_flush_denorm,
                   (u32)g_vk_preserve_infnan,
                   (u32)g_vk_preserve_infnan64,

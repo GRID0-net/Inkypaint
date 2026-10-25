@@ -543,6 +543,9 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                     (unsigned long long)(upload_bytes >> 20), (unsigned long long)slow_frames,
                     (unsigned long long)(slowest_ns / 1000000));
                 slow_frames = slowest_ns = 0;
+                LOG("vulkan: programs with branches: %llu structured, %llu in the dispatch loop\n",
+                    __atomic_load_n(&g_shader_flow_structured, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_shader_flow_loops, __ATOMIC_RELAXED));
                 u64 early_made, early_hits, early_left;
                 vk_pipeline_prewarm_stats(&early_made, &early_hits, &early_left);
                 if (early_made || early_left)

@@ -145,6 +145,14 @@ extern int g_shader_clock_scopes;
 /* VK_KHR_shader_maximal_reconvergence: a structured program's lanes reconverge where its constructs merge, so one
    whose lanes must reconverge (subgroup operations, barriers, derivatives) takes structured control flow too */
 extern int g_shader_maximal_reconvergence;
+/* the device reconverges a subgroup's lanes at the merge of each structured construct without promising it
+   (VK_KHR_shader_maximal_reconvergence): Apple's GPUs under MoltenVK, whose Metal compiler gets structured code from
+   SPIRV-Cross and reconverges at its merges as every desktop GPU does. Programs whose lanes must reconverge (fragment
+   derivatives in branches, subgroup operations, barriers) are then written structured too, instead of in the
+   dispatch loop that runs one block of the lanes at the lowest pc an iteration */
+extern int g_shader_structured_reconverges;
+/* programs translated with branches: in structured constructs, and in the dispatch loop (counted, never reset) */
+extern unsigned long long g_shader_flow_structured, g_shader_flow_loops;
 /* in clip_enable: a later stage before rasterization (tessellation or geometry) follows, and the last one applies
    the depth mode and the clip distances */
 #define SNX_SH_NOT_LAST (1u << 31)

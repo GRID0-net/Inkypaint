@@ -70,6 +70,8 @@ int g_shader_float16 = 1;
 int g_shader_tessellation = 1;
 int g_shader_clock_scopes;
 int g_shader_maximal_reconvergence;
+int g_shader_structured_reconverges;
+unsigned long long g_shader_flow_structured, g_shader_flow_loops;
 
 /* the Function variable of a register, predicate or flag (z, s, c, o) */
 static u32 var_of(const DirectCtx* c, u32 v) {
@@ -4416,9 +4418,10 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
            again as the program's code. Lanes that must reconverge for subgroup operations, barriers or derivatives
            take them where the device reconverges them at each construct's merge (MaximallyReconvergesKHR), as the
            hardware does at its SYNC targets, and keep the loop otherwise, which runs the lowest pc first */
-        if (!dynamic_stack && !has_calls && (!converge || g_shader_maximal_reconvergence) && !unknown_brx)
+        if (!dynamic_stack && !has_calls &&
+            (!converge || g_shader_maximal_reconvergence || g_shader_structured_reconverges) && !unknown_brx)
             structure = shader_structure(insn, n, block_start, pop_targets);
-        if (structure && converge) { /* the guarantee those lanes need */
+        if (structure && converge && g_shader_maximal_reconvergence) { /* the guarantee those lanes need */
             spv_emit_extension(&c->emit, "SPV_KHR_maximal_reconvergence");
             spv_emit_execution_mode(&c->emit, fn, 6023, 0, 0); /* MaximallyReconvergesKHR */
         }
@@ -4432,6 +4435,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
         }
     }
     /* every OpVariable comes before the first block's other instructions, the clip distances' stores included */
+    if (has_flow) __atomic_fetch_add(structure ? &g_shader_flow_structured : &g_shader_flow_loops, 1, __ATOMIC_RELAXED);
     if (has_flow && !structure)
         pc = spv_emit_function_variable_init(&c->emit, reg_ptr, spv_emit_constant_u32(&c->emit, c->u32_type, 11));
     if (structure && structure->uses_flag) se.flag = spv_emit_function_variable_init(&c->emit, reg_ptr, c->zero);
