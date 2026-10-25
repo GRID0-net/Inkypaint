@@ -170,8 +170,8 @@ do_perf() {
     [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
     local out="$LOGS/perf-$(stamp)"; mkdir -p "$out"
     local mvk; mvk=$(mvk_dylib)
-    say "measured run for $secs s into logs/$(basename "$out") (settings: ${*:-none})"
-    echo "settings: ${*:-none}" > "$out/settings.txt"
+    say "measured run for $secs s into logs/$(basename "$out") (settings: ${*:-none}; $(env | grep '^MVK_' | tr '\n' ' '))"
+    { echo "settings: ${*:-none}"; env | grep '^MVK_' || echo "MVK: defaults"; } > "$out/settings.txt"
     ( cd "$GAME_DIR" && SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 \
         "./$GAME_ID" --seconds="$secs" --vk_gpu_profile=1 --shot="$out/last" "$@" ) > "$out/console.txt" 2>&1 &
     local game=$!
@@ -197,6 +197,7 @@ do_perf() {
     kill "$vms" "$poll" 2>/dev/null
     cp "$GAME_DIR/$GAME_ID.log" "$out/game.log" 2>/dev/null
     cp "$GAME_DIR/threads.txt" "$out/game-threads.txt" 2>/dev/null
+    [ -f "$out/last.ppm" ] && sips -s format png "$out/last.ppm" --out "$out/last.png" > /dev/null 2>&1 && rm -f "$out/last.ppm"
     grep "perf:" "$out/game.log" | tail -20
     say "done: logs/$(basename "$out")"
     return $rc
