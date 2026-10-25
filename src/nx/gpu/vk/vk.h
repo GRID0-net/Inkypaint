@@ -1082,6 +1082,7 @@ void vk_rtdump_draw(u64 vs, u64 fs);
 void vk_rtdump_pass_end(Surf* const* rt, u32 n, const Surf* zt);
 void vk_rtdump_present(void);
 int vk_rtdump_split(void); /* the dumped frame ends its pass after each draw (SNX_RT_DUMP_SPLIT) */
+int vk_rtdump_fill(const Surf* s); /* 1 once for each full-size color target of the dumped frame (SNX_RT_DUMP_FILL) */
 /* a draw of the dumped frame binds texture slot i of a stage: found is what its header resolved to, bound the image
    sampled (a copy of a target the draw renders to, or NULL for the null texture) */
 void vk_rtdump_tex(int stage, int slot, const Surf* found, const Surf* bound);

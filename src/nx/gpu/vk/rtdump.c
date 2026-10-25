@@ -37,6 +37,9 @@ typedef struct {
 
 static struct {
     int on; /* -1 not decided, 0 off, 1 on */
+    int fill;  /* SNX_RT_DUMP_FILL: full-size color targets start the dumped frame magenta, so what no draw wrote shows */
+    const Surf* filled[16];
+    u32 nfilled;
     int split; /* SNX_RT_DUMP_SPLIT: each draw ends its pass, so the pictures are the main target after each draw */
     const char* dir;
     u32 at;      /* the present whose frame is dumped */
@@ -63,6 +66,8 @@ static int rtd_on(void) {
         g_rtd.on = g_rtd.dir && *g_rtd.dir;
         const char* split = getenv("SNX_RT_DUMP_SPLIT");
         g_rtd.split = split && *split && *split != '0';
+        const char* fill = getenv("SNX_RT_DUMP_FILL");
+        g_rtd.fill = fill && *fill && *fill != '0';
         if (g_rtd.on) LOG("vulkan: the passes of frame %u go to %s as pictures (SNX_RT_DUMP)\n", g_rtd.at, g_rtd.dir);
     }
     int on = g_rtd.on && !g_rtd.done && g_vk_present == g_rtd.at;
@@ -76,6 +81,16 @@ static int rtd_on(void) {
 
 static void tex_add(RtdTex* list, u32* n, const RtdTex* t);
 int vk_rtdump_split(void) { return g_rtd.split && rtd_on(); }
+int vk_rtdump_fill(const Surf* s) {
+    if (!rtd_on() || !g_rtd.fill || !s || s->w < 1280 || s->f.depth || s->f.is_int) return 0;
+    for (u32 i = 0; i < g_rtd.nfilled; i++)
+        if (g_rtd.filled[i] == s) return 0;
+    if (g_rtd.nfilled == 16) return 0;
+    g_rtd.filled[g_rtd.nfilled++] = s;
+    if (g_rtd.index)
+        fprintf(g_rtd.index, "  pass %u fills %llx magenta\n", g_rtd.pass, (unsigned long long)s->gva);
+    return 1;
+}
 void vk_rtdump_draw(u64 vs, u64 fs) {
     if (!rtd_on()) return;
     g_rtd.draws++;

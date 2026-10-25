@@ -275,6 +275,14 @@ static int render_begin(Surf** rt, Surf* zt, u32 n, int zt_ro, int srgb_write, u
         vk_gpuprof_pass_begin(cb, n ? rt[0] : NULL, zt, att);
     }
     rec_CmdBeginRendering(cb, &ri);
+    for (u32 i = 0; i < n; i++) /* SNX_RT_DUMP_FILL: what no draw of the dumped frame writes stays magenta */
+        if (rt[i] && vk_rtdump_fill(rt[i])) {
+            VkClearAttachment a = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .colorAttachment = i};
+            a.clearValue.color.float32[0] = a.clearValue.color.float32[2] = 1.0f;
+            VkClearRect cr = {{{0, 0}, ext}, 0, 1};
+            rec_CmdClearAttachments(cb, 1, &a, 1, &cr);
+            g_rp.drawn = 1; /* the game's own clears in this pass come after it, not into its load op */
+        }
     memcpy(g_rp.rt, rt, sizeof g_rp.rt);
     g_rp.zt = zt;
     g_rp.n = n;
