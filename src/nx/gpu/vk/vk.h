@@ -1077,6 +1077,10 @@ void vk_gpuprof_pass_end_site(const char* file, int line); /* the code that ende
 /* a draw recorded in the open pass, by its programs' hashes, for SNX_DRAW_SPLIT's table of draws by GPU time */
 void vk_gpuprof_draw(u64 vs, u64 fs, u32 count, u32 instances);
 int vk_gpuprof_split(void); /* SNX_DRAW_SPLIT (with vk_gpu_profile): every draw ends its pass, to be timed alone */
+/* rtdump.c, SNX_RT_DUMP=dir: one frame's passes as pictures (frame SNX_RT_DUMP_AT), with an index of their programs */
+void vk_rtdump_draw(u64 vs, u64 fs);
+void vk_rtdump_pass_end(Surf* const* rt, u32 n, const Surf* zt);
+void vk_rtdump_present(void);
 void vk_gpuprof_frame_done(u32 slot);
 /* the device's timestamps next to the client's clock (VK_EXT_calibrated_timestamps with a host time domain) */
 int vk_gpuprof_calibrated(void);

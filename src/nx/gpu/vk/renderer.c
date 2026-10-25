@@ -511,6 +511,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
         memcpy(was, is, sizeof was);
         last_present_ns = now_ns;
         g_vk_present++;
+        vk_rtdump_present();
         vk_mem_present();
         if (g_last) vk_surf_touch(g_last); /* what screenshots read stays */
         vk_tex_frame();

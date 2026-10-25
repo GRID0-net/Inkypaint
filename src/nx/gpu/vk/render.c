@@ -79,6 +79,7 @@ void vk_render_end_at(const char* file, int line) {
     vk_gpuprof_pass_end(cb);
     if (g_barrier_owed) owed_barrier(cb);
     vk_rec_pass_close();
+    vk_rtdump_pass_end(g_rp.rt, g_rp.n, g_rp.zt);
 }
 
 /* s may be touched in front of the open pass: neither its target nor read or written by one of its draws */
@@ -3182,6 +3183,7 @@ retry:
             if (stages[i] && (stages[i]->si.gbuf_wmask || stages[i]->si.nimg)) g_storage_dirty = 1;
     }
     vk_gpuprof_draw(vs ? vs->hash : 0, fs ? fs->hash : 0, indexed ? icount : count, instances);
+    vk_rtdump_draw(vs ? vs->hash : 0, fs ? fs->hash : 0);
     g_vk_drawn++;
     if ((vs && vs->indexed) || (fs && fs->indexed)) g_vk_indexed_drawn++;
     if (vk_gpuprof_split()) vk_render_end(); /* SNX_DRAW_SPLIT: each draw timed as a pass of its own */

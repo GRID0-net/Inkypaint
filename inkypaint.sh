@@ -16,6 +16,8 @@
 #                             programs, whose SPIR-V lands in local/spv (the game's shaders: they stay here)
 #   ./inkypaint.sh texdiag [secs] two measured runs for the missing skin and eye colours: indexed textures as now
 #                             (each reads its table's first texture), then through texture arrays
+#   ./inkypaint.sh rtdump [frame] one frame's rendering passes as pictures (frame 1500 by default, about 25 s in),
+#                             into local/rtdump-<time> (the game's frame: it stays here)
 #   ./inkypaint.sh capture    the game with Metal's frame capture on, for Xcode's GPU profiler
 #   ./inkypaint.sh all        doctor, setup, build, prepare, run
 #
@@ -271,6 +273,22 @@ do_texdiag() {
     done
 }
 
+# Where a frame goes wrong: every pass of one frame, each color target as a picture at the pass's end, with
+# local/rtdump-<time>/index.txt naming each pass's targets and programs. The run ends a while after that frame
+do_rtdump() {
+    local at=${1:-1500}
+    local out="$LOCAL/rtdump-$(stamp)"; mkdir -p "$out"
+    local secs=$(( at / 60 + 20 ))
+    say "frame $at's passes into local/$(basename "$out"), a $secs s run"
+    SNX_RT_DUMP="$out" SNX_RT_DUMP_AT="$at" do_run "$secs" || return 1
+    local n=0
+    for f in "$out"/*.ppm; do
+        [ -f "$f" ] || continue
+        sips -s format png "$f" --out "${f%.ppm}.png" > /dev/null 2>&1 && rm -f "$f" && n=$((n + 1))
+    done
+    say "$n pictures, $(wc -l < "$out/index.txt" 2>/dev/null || echo 0) passes listed in local/$(basename "$out")/index.txt"
+}
+
 # For Xcode: the game with Metal's capture layer on and no time limit. In Xcode, Debug > Attach to Process picks the
 # game (its name is its title ID), then the debug bar's Metal button captures a frame: its Performance view times
 # every draw and the shader profiler each line of the translated MSL. Instruments' Metal System Trace template
@@ -292,6 +310,7 @@ case "$cmd" in
     gpudiag) logged gpudiag do_gpudiag "$@" ;;
     shaderprof) logged shaderprof do_shaderprof "$@" ;;
     texdiag) logged texdiag do_texdiag "$@" ;;
+    rtdump) logged rtdump do_rtdump "$@" ;;
     capture) logged capture do_capture "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
     *) sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//' ;;
