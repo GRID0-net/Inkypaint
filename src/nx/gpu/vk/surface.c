@@ -474,6 +474,7 @@ static void rt_reload_bl(Surf* s) {
 void vk_rt_reload(u64 gva) {
     Surf* s = vk_rt_find(gva);
     if (!s) return;
+    vk_rtdump_event("reloaded from guest memory", s);
     vk_surf_wrote(s); /* the copies of it (crops) are out of date */
     if (s->f.depth || !s->f.raw || !moves_scaled(s)) {
         /* new memory over a target we can't load as is: memory is the truth. Its contents are undefined until it is
@@ -704,6 +705,7 @@ static void surf_flush(Surf* s, const u8* original) {
 u64 vk_surf_flush_size(const Surf* s) { return flush_bytes(s); }
 void vk_surf_flush_record(Surf* s, VkBuffer buf, u64 at) {
     VkCommandBuffer cb;
+    vk_rtdump_event("written back to guest memory", s);
     rt_flush_older(s);
     vk_render_end();
     cb = vk_cmd();
@@ -913,6 +915,7 @@ static Surf* rt_create_(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth, u32
             parked = s;
     for (Surf* s = g_surfh[hkey(gva)]; s; s = s->next)
         if (s->gva == gva && s->is_rt) {
+            vk_rtdump_event("parked: another target takes its address", s);
             rt_pages(s, -1);
             rtx_del(gva);
             s->gva = gva | 1ull << 63;
@@ -920,6 +923,7 @@ static Surf* rt_create_(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth, u32
             g_vk_surf_epoch++;
         }
     if (parked) {
+        vk_rtdump_event("taken out of parking", parked);
         parked->gva = gva;
         rtx_add(parked);
         g_parked--;
@@ -937,6 +941,7 @@ static Surf* rt_create_(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth, u32
     s->volume = volume;
     s->rt_size = rt_bytes(s);
     rt_pages(s, 1);
+    vk_rtdump_event("made", s);
     s->gw = gpu_mem_generation();
     /* the CPU may have written the memory already (a cleared or decoded frame): start from it */
     if (!depth) vk_rt_reload(gva);
@@ -965,6 +970,7 @@ void vk_rt_note_read(Surf* s) {
         s->gw = gpu_mem_generation(); /* still unwritten as of now: the next check asks only about later writes */
         return;
     }
+    vk_rtdump_event("read after its guest memory was written", s);
     vk_rt_reload(s->gva);
     if (s->gw != gpu_mem_generation())
         LOG_LIMIT(1, "vulkan: could not reload render target at %llx after its guest memory changed\n",
@@ -1375,6 +1381,7 @@ static int blit_depth(Surf* st, const Surf2D* s, const Surf2D* d, int dx, int dy
     b[1].srcSubresource.aspectMask = b[1].dstSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
     rec_CmdBlitImage(cb, st->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dt->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                      st->f.stencil ? 2 : 1, b, VK_FILTER_NEAREST);
+    vk_rtdump_event("written by a 2D engine blit (depth)", dt);
     vk_surf_wrote(dt);
     if (dx == 0 && dy == 0 && X1 == (i32)dt->sw && Y1 == (i32)dt->sh)
         vk_rt_drawn_full(dt);
@@ -1426,6 +1433,7 @@ int vk_blit2d(const Surf2D* s, const Surf2D* d, int dx, int dy, int dw, int dh, 
     int linear = scaled && !st->f.is_int && blit_ok(st->f.vk, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
     rec_CmdBlitImage(cb, st->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dt->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                    &b, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+    vk_rtdump_event("written by a 2D engine blit", dt);
     vk_surf_wrote(dt);
     if (dx == 0 && dy == 0 && X1 == (i32)dt->sw && Y1 == (i32)dt->sh)
         vk_rt_drawn_full(dt);

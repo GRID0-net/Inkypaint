@@ -1084,6 +1084,7 @@ void vk_rtdump_present(void);
 /* a draw of the dumped frame binds texture slot i of a stage: found is what its header resolved to, bound the image
    sampled (a copy of a target the draw renders to, or NULL for the null texture) */
 void vk_rtdump_tex(int stage, int slot, const Surf* found, const Surf* bound);
+void vk_rtdump_event(const char* what, const Surf* s); /* a target loaded or written back, between passes */
 void vk_gpuprof_frame_done(u32 slot);
 /* the device's timestamps next to the client's clock (VK_EXT_calibrated_timestamps with a host time domain) */
 int vk_gpuprof_calibrated(void);

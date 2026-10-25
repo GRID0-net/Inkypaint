@@ -62,7 +62,13 @@ static int rtd_on(void) {
         g_rtd.on = g_rtd.dir && *g_rtd.dir;
         if (g_rtd.on) LOG("vulkan: the passes of frame %u go to %s as pictures (SNX_RT_DUMP)\n", g_rtd.at, g_rtd.dir);
     }
-    return g_rtd.on && !g_rtd.done && g_vk_present == g_rtd.at;
+    int on = g_rtd.on && !g_rtd.done && g_vk_present == g_rtd.at;
+    if (on && !g_rtd.index) {
+        char path[1100];
+        snprintf(path, sizeof path, "%s/index.txt", g_rtd.dir);
+        g_rtd.index = fopen(path, "w");
+    }
+    return on;
 }
 
 static void tex_add(RtdTex* list, u32* n, const RtdTex* t);
@@ -90,6 +96,12 @@ void vk_rtdump_tex(int stage, int slot, const Surf* found, const Surf* bound) {
     RtdTex t = {found, bound, stage, slot, bound ? bound->crop_gen : 0, found ? found->wgen : 0,
                 bound ? bound->took_drawn : 0};
     tex_add(g_rtd.next, &g_rtd.nnext, &t);
+}
+
+void vk_rtdump_event(const char* what, const Surf* s) {
+    if (!rtd_on() || !g_rtd.index) return;
+    fprintf(g_rtd.index, "  before pass %u: %llx %ux%u format %u %s\n", g_rtd.pass, (unsigned long long)s->gva, s->w,
+            s->h, (u32)s->f.vk, what);
 }
 
 static int blittable(VkFormat f) {
