@@ -2,9 +2,12 @@
    Copyright 2026 the inkypaint contributors */
 /* SNX_RT_DUMP=dir: one frame's rendering passes as pictures, to find the pass where a frame goes wrong. At the end
    of each pass of frame SNX_RT_DUMP_AT (presents counted from the start, 1500 by default), each color target is
-   blitted to RGBA8 at up to 960 pixels wide and copied into a buffer of its own; at the next present the frame is
+   blitted to RGBA16F at up to 960 pixels wide and copied into a buffer of its own; at the next present the frame is
    waited for and every picture written as dir/<pass>_<slot>_<address>_<w>x<h>_f<format>.ppm, with index.txt naming
-   each pass's targets, draws and programs. A debugging tool: the pictures are the game's frame and stay local */
+   each pass's targets, draws and programs. A float target (HDR, values far from 0..1) is scaled so its brightest
+   pixels but one in 200 are white, then gamma encoded, and index.txt gives the scale and the range of each picture;
+   UNORM targets are written as they are. A debugging tool: the pictures are the game's frame and stay local */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,7 +80,7 @@ static void rtd_take(Surf* s, u32 slot) {
     if (!p->h) p->h = 1;
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                             .imageType = VK_IMAGE_TYPE_2D,
-                            .format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .format = VK_FORMAT_R16G16B16A16_SFLOAT,
                             .extent = {p->w, p->h, 1},
                             .mipLevels = 1,
                             .arrayLayers = 1,
@@ -88,7 +91,7 @@ static void rtd_take(Surf* s, u32 slot) {
     VmaAllocationCreateInfo aci = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     if (!VK_OK(vmaCreateImage(g_vk.vma, &ii, &aci, &p->img, &p->img_mem, NULL))) return;
     VkBufferCreateInfo bci = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                              .size = (u64)p->w * p->h * 4,
+                              .size = (u64)p->w * p->h * 8,
                               .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                               .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     VmaAllocationCreateInfo bai = {.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
@@ -152,6 +155,83 @@ void vk_rtdump_pass_end(Surf* const* rt, u32 n, const Surf* zt) {
     g_rtd.nprog = 0;
 }
 
+static float half_float(u16 h) {
+    u32 e = (h >> 10) & 31, m = h & 1023, sign = (u32)(h >> 15) << 31, bits;
+    if (!e) {
+        float v = (float)m / 16777216.0f; /* subnormal: m * 2^-24 */
+        return sign ? -v : v;
+    }
+    bits = sign | (e == 31 ? 0x7F800000u | (m << 13) : ((e + 112) << 23) | (m << 13));
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
+}
+static int cmp_float(const void* a, const void* b) {
+    float x = *(const float*)a, y = *(const float*)b;
+    return x < y ? -1 : x > y;
+}
+static int is_unorm(u32 f) {
+    return (f >= VK_FORMAT_R8_UNORM && f <= VK_FORMAT_A2B10G10R10_SINT_PACK32 && f != VK_FORMAT_B10G11R11_UFLOAT_PACK32) &&
+           f != VK_FORMAT_R16G16B16A16_SFLOAT;
+}
+/* the picture as PPM: HDR scaled and gamma encoded, UNORM as it is */
+static int rtd_write(const RtdPic* p, const char* path) {
+    u64 n = (u64)p->w * p->h;
+    float* v = malloc(n * 3 * sizeof *v);
+    float* sorted = malloc(n * sizeof *sorted);
+    if (!v || !sorted) {
+        free(v);
+        free(sorted);
+        return 0;
+    }
+    float lo = 1e30f, hi = -1e30f;
+    u32 nans = 0;
+    for (u64 k = 0; k < n; k++) {
+        float m = 0;
+        for (int c = 0; c < 3; c++) {
+            u16 h;
+            memcpy(&h, p->px + k * 8 + (u64)c * 2, 2);
+            float x = half_float(h);
+            if (x != x) {
+                nans++;
+                x = 0;
+            }
+            v[k * 3 + (u64)c] = x;
+            if (x < lo) lo = x;
+            if (x > hi) hi = x;
+            if (x > m) m = x;
+        }
+        sorted[k] = m;
+    }
+    int hdr = !is_unorm(p->fmt);
+    float scale = 1.0f;
+    if (hdr) {
+        qsort(sorted, n, sizeof *sorted, cmp_float);
+        float top = sorted[n - 1 - n / 200];
+        scale = top > 0 ? 1.0f / top : 1.0f;
+    }
+    free(sorted);
+    if (g_rtd.index)
+        fprintf(g_rtd.index, "picture %u_%u: values %g to %g, %u NaN, %s %g\n", p->pass, p->slot, (double)lo,
+                (double)hi, nans, hdr ? "scaled by" : "as they are,", (double)scale);
+    FILE* f = fopen(path, "wb");
+    int ok = 0;
+    if (f) {
+        fprintf(f, "P6\n%u %u\n255\n", p->w, p->h);
+        for (u64 k = 0; k < n * 3; k++) {
+            float x = v[k] * scale;
+            if (x < 0) x = 0;
+            if (x > 1) x = 1;
+            if (hdr) x = powf(x, 1.0f / 2.2f);
+            u8 b = (u8)(x * 255.0f + 0.5f);
+            fwrite(&b, 1, 1, f);
+        }
+        ok = fclose(f) == 0;
+    }
+    free(v);
+    return ok;
+}
+
 /* at a present: once the dumped frame is presented, its pictures are written */
 void vk_rtdump_present(void) {
     if (g_rtd.on <= 0 || g_rtd.done || g_vk_present <= g_rtd.at) return;
@@ -164,12 +244,7 @@ void vk_rtdump_present(void) {
         char path[1200];
         snprintf(path, sizeof path, "%s/%03u_%u_%llx_%ux%u_f%u.ppm", g_rtd.dir, p->pass, p->slot,
                  (unsigned long long)p->gva, p->sw, p->sh, p->fmt);
-        FILE* f = fopen(path, "wb");
-        if (f) {
-            fprintf(f, "P6\n%u %u\n255\n", p->w, p->h);
-            for (u64 k = 0; k < (u64)p->w * p->h; k++) fwrite(p->px + k * 4, 1, 3, f);
-            written += fclose(f) == 0;
-        }
+        written += rtd_write(p, path);
         vmaDestroyBuffer(g_vk.vma, p->buf, p->buf_mem);
         vmaDestroyImage(g_vk.vma, p->img, p->img_mem);
     }
