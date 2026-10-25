@@ -3217,7 +3217,7 @@ retry:
     vk_rtdump_draw(vs ? vs->hash : 0, fs ? fs->hash : 0);
     g_vk_drawn++;
     if ((vs && vs->indexed) || (fs && fs->indexed)) g_vk_indexed_drawn++;
-    if (vk_gpuprof_split()) vk_render_end(); /* SNX_DRAW_SPLIT: each draw timed as a pass of its own */
+    if (vk_gpuprof_split() || vk_rtdump_split()) vk_render_end(); /* each draw timed or pictured alone */
 }
 
 /* DRAW_TEXTURE (3D 0x420-0x42B, drawn when 0x42B is written): a texture's rectangle blitted onto color target 0, as

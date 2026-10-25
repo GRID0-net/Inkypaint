@@ -14,7 +14,7 @@
 #include "nx/gpu/vk/vk.h"
 #include "nx/runtime/platform/log.h"
 
-#define RTD_MAX   192 /* pictures a frame */
+#define RTD_MAX   768 /* pictures a frame */
 #define RTD_PROGS 8   /* programs listed for a pass */
 #define RTD_TEXS  24  /* textures listed for a pass */
 
@@ -37,6 +37,7 @@ typedef struct {
 
 static struct {
     int on; /* -1 not decided, 0 off, 1 on */
+    int split; /* SNX_RT_DUMP_SPLIT: each draw ends its pass, so the pictures are the main target after each draw */
     const char* dir;
     u32 at;      /* the present whose frame is dumped */
     int done;
@@ -60,6 +61,8 @@ static int rtd_on(void) {
         const char* at = getenv("SNX_RT_DUMP_AT");
         g_rtd.at = at && *at ? (u32)strtoul(at, NULL, 10) : 1500;
         g_rtd.on = g_rtd.dir && *g_rtd.dir;
+        const char* split = getenv("SNX_RT_DUMP_SPLIT");
+        g_rtd.split = split && *split && *split != '0';
         if (g_rtd.on) LOG("vulkan: the passes of frame %u go to %s as pictures (SNX_RT_DUMP)\n", g_rtd.at, g_rtd.dir);
     }
     int on = g_rtd.on && !g_rtd.done && g_vk_present == g_rtd.at;
@@ -72,6 +75,7 @@ static int rtd_on(void) {
 }
 
 static void tex_add(RtdTex* list, u32* n, const RtdTex* t);
+int vk_rtdump_split(void) { return g_rtd.split && rtd_on(); }
 void vk_rtdump_draw(u64 vs, u64 fs) {
     if (!rtd_on()) return;
     g_rtd.draws++;
@@ -113,9 +117,11 @@ static int blittable(VkFormat f) {
 /* one color target as it is at the end of the pass */
 static void rtd_take(Surf* s, u32 slot) {
     if (g_rtd.npic == RTD_MAX || !s || s->f.depth || s->f.is_int || !blittable(s->f.vk)) return;
+    if (g_rtd.split && s->w < 1280) return; /* a picture a draw: the full-size targets alone, small */
     RtdPic* p = &g_rtd.pic[g_rtd.npic];
     memset(p, 0, sizeof *p);
-    p->w = s->sw > 960 ? 960 : s->sw;
+    u32 most = g_rtd.split ? 480 : 960;
+    p->w = s->sw > most ? most : s->sw;
     p->h = (u32)((u64)s->sh * p->w / (s->sw ? s->sw : 1));
     if (!p->h) p->h = 1;
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
