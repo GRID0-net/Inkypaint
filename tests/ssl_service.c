@@ -3,7 +3,8 @@
 /* ssl (ssl.c) through its generated dispatchers, against a TLS server in a thread of the test on the host's loopback:
    the game's socket comes from bsd:u (bsd.c, built beside), as the SDK makes it, and the server's certificate is
    self-signed, made here. Verification with and without the certificate imported, the host name check, Read and
-   Write in both I/O modes, Peek, Pending, Poll, the server's certificate, and the raw layouts the SDK sends */
+   Write in both I/O modes, Peek, Pending, Poll, the server's certificate, the console's certificate ids from the
+   host's roots (inkypaint), and the raw layouts the SDK sends */
 #include "nx/hle/services/network/network.h"
 #include <stdarg.h>
 #include <time.h>
@@ -186,6 +187,44 @@ static void make_cert(void) {
     X509_EXTENSION_free(san);
     CHECK(X509_sign(server_cert, server_key, EVP_sha256()) > 0);
 }
+/* a self-signed root named cn (and ou when not NULL), for the console's certificate ids (GetCertificates) */
+static X509* make_root(const char* cn, const char* ou) {
+    X509* x = X509_new();
+    X509_NAME* name = X509_NAME_new();
+    CHECK(x && name && X509_set_version(x, X509_VERSION_3));
+    ASN1_INTEGER_set(X509_get_serialNumber(x), 2);
+    X509_gmtime_adj(X509_getm_notBefore(x), -3600);
+    X509_gmtime_adj(X509_getm_notAfter(x), 86400);
+    CHECK(X509_set_pubkey(x, server_key));
+    CHECK(X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char*)cn, -1, -1, 0));
+    if (ou) CHECK(X509_NAME_add_entry_by_txt(name, "OU", MBSTRING_ASC, (const unsigned char*)ou, -1, -1, 0));
+    CHECK(X509_set_subject_name(x, name) && X509_set_issuer_name(x, name));
+    X509_NAME_free(name);
+    CHECK(X509_sign(x, server_key, EVP_sha256()) > 0);
+    return x;
+}
+/* The host's roots, from a bundle of three made here (SSL_CERT_FILE): ISRG Root X1 (id 1035), GlobalSign's R3, known
+   by its OU (1023), and one that is none of the console's. Returns the DER sizes of the first two */
+static void make_roots(int* isrg, int* r3) {
+    X509* roots[3];
+    FILE* f = fopen("ssl_service_roots.pem", "w");
+    int i;
+    CHECK(f != NULL);
+    roots[0] = make_root("ISRG Root X1", NULL);
+    roots[1] = make_root("GlobalSign", "GlobalSign Root CA - R3");
+    roots[2] = make_root("Not One Of The Console's", NULL);
+    for (i = 0; i < 3; i++) CHECK(PEM_write_X509(f, roots[i]));
+    fclose(f);
+    *isrg = i2d_X509(roots[0], NULL);
+    *r3 = i2d_X509(roots[1], NULL);
+    for (i = 0; i < 3; i++) X509_free(roots[i]);
+#ifdef _WIN32
+    _putenv_s("SSL_CERT_FILE", "ssl_service_roots.pem");
+#else
+    setenv("SSL_CERT_FILE", "ssl_service_roots.pem", 1);
+#endif
+}
+
 /* the server's socket under its SSL, blocking */
 static int sbio_write(BIO* b, const char* data, size_t size, size_t* written) {
     int64_t r = snx_socket_send(BIO_get_data(b), data, size, 0, NULL);
@@ -326,7 +365,7 @@ int main(void) {
     u16 port;
     i32 fd;
     u32 n;
-    int r;
+    int r, isrg_size, r3_size;
 #ifdef _WIN32
     HANDLE thread;
 #else
@@ -337,6 +376,7 @@ int main(void) {
     network_init();
     snx_net_set_log(NULL);
     make_cert();
+    make_roots(&isrg_size, &r3_size);
 
     /* the server, on an ephemeral port of the loopback */
     CHECK(snx_socket_open(&listener, SNX_AF_INET, SNX_SOCK_STREAM, 0) == 0);
@@ -364,16 +404,42 @@ int main(void) {
     CHECK(call(bsd) == 0);
 
     ssl = new_ssl();
-    /* GetCertificateBufSize and GetCertificates: no built-in certificate, the terminating entry alone */
+    /* GetCertificateBufSize and GetCertificates: the host's roots that are the console's, by the ids asked, laid out
+       {id, status, size, offset} each then a terminating entry, the DERs after them. No firmware is involved */
     memset(GP(BUF_A), 0xFF, 4); /* CaCertificateId All */
     request(3);
     in_buf(BUF_A, 4);
-    CHECK(call(ssl) == 0 && reply32(0) == 0x18);
+    CHECK(call(ssl) == 0 && reply32(0) == 3 * 0x18 + ((u32)isrg_size + 3 & ~3u) + ((u32)r3_size + 3 & ~3u));
     request(2);
-    out_buf(BUF_B, 0x18);
+    out_buf(BUF_B, 0x1000);
     in_buf(BUF_A, 4);
-    CHECK(call(ssl) == 0 && reply32(0) == 0);
-    CHECK(gr32(BUF_B) == 0xFFFFFFFF && gr32(BUF_B + 4) == 0xFFFFFFFF && gr64(BUF_B + 8) == 0 && gr64(BUF_B + 16) == 0);
+    CHECK(call(ssl) == 0 && reply32(0) == 2);
+    /* in the console's order of ids: R3 (1023), then ISRG Root X1 (1035) */
+    CHECK(gr32(BUF_B) == 1023 && gr32(BUF_B + 4) == 1 && gr64(BUF_B + 8) == (u64)r3_size && gr64(BUF_B + 16) == 0x48);
+    CHECK(gr32(BUF_B + 0x18) == 1035 && gr64(BUF_B + 0x20) == (u64)isrg_size &&
+          gr64(BUF_B + 0x28) == 0x48 + (u64)r3_size);
+    CHECK(gr32(BUF_B + 0x30) == 0xFFFFFFFF && gr32(BUF_B + 0x34) == 0xFFFFFFFF && gr64(BUF_B + 0x38) == 0);
+    {
+        const unsigned char* p = GP(BUF_B + 0x48 + r3_size);
+        X509* x = d2i_X509(NULL, &p, isrg_size);
+        CHECK(x && subject_is(x, NID_commonName, "ISRG Root X1"));
+        X509_free(x);
+    }
+    /* one id, ISRG Root X1's, among ones the host hasn't (the console maker's own CA G3, id 1) */
+    snx_st_le32(GP(BUF_A), 1);
+    snx_st_le32(GP(BUF_A + 4), 1035);
+    request(3);
+    in_buf(BUF_A, 8);
+    CHECK(call(ssl) == 0 && reply32(0) == 2 * 0x18 + ((u32)isrg_size + 3 & ~3u));
+    request(2);
+    out_buf(BUF_B, 0x1000);
+    in_buf(BUF_A, 8);
+    CHECK(call(ssl) == 0 && reply32(0) == 1 && gr32(BUF_B) == 1035 && gr64(BUF_B + 16) == 0x30);
+    CHECK(gr32(BUF_B + 0x18) == 0xFFFFFFFF);
+    /* none of the host's: the terminating entry alone */
+    request(3);
+    in_buf(BUF_A, 4);
+    CHECK(call(ssl) == 0 && reply32(0) == 0x18);
     request(2);
     out_buf(BUF_B, 0x10);
     in_buf(BUF_A, 4);

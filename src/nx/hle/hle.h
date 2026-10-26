@@ -50,6 +50,8 @@ typedef struct {
     HleLdn ldn;
     HleNifm nifm;
     HleSsl ssl;
+    HleGrid0 grid0;
+    HleFriends friends;
     /* the file system */
     HleFs fs;
 } Hle;

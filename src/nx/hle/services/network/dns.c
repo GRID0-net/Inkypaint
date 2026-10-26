@@ -8,6 +8,7 @@
    addrinfo are libnx's resolver.c layout, which Eden verified against the console: big-endian fields, except the
    address and port, which the console passes through htonl once more. */
 #include "nx/hle/services/network/network.h"
+#include "nx/hle/services/network/grid0.h"
 #include "hle/services/network/dns.swipc.inc"
 #ifndef _WIN32
 #include <strings.h>
@@ -70,7 +71,15 @@ static void put_reversed(Out* o, const uint8_t* v, size_t n) { /* a big-endian f
 
 /* the guest's name lookup, 0 or SNX_EAI_*. IPv4 only */
 static int lookup(const char* host, const char* service, int socktype, int protocol, int flags, SnxAddrInfo** out) {
+    uint8_t ip[4];
+    char address[16];
     *out = NULL;
+    /* inkypaint: with GRID0+ on, the console's server names are its server's (grid0.c), so they aren't blocked */
+    if (grid0_redirect(host, ip)) {
+        snprintf(address, sizeof address, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+        host = address;
+        flags = (flags & ~SNX_AI_CANONNAME) | SNX_AI_NUMERICHOST;
+    }
     if (blocked(host)) {
         LOG("sfdnsres: %s is blocked, answering EAI_AGAIN\n", host);
         return SNX_EAI_AGAIN;

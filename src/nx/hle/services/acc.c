@@ -7,6 +7,7 @@
    account */
 #include "nx/hle/services/services_int.h"
 #include "nx/hle/hle.h"
+#include "nx/hle/services/network/grid0.h"
 #include "gui/splash.h"
 
 #include "hle/services/acc.swipc.inc"
@@ -198,29 +199,64 @@ static int nn_account_profile_IProfile_LoadImage(SvcObj* self, IpcBuf image, u32
 }
 
 /* ============================================================ IManagerForApplication */
-/* the id the account would have, made from the user's */
+/* the id the account would have, made from the user's, or with GRID0+ the signed-in account's: the id NPLN names
+   this player and every friendship by */
 static int nn_account_baas_IManagerForApplication_GetAccountId(SvcObj* self, nn_account_NetworkServiceAccountId* id) {
     const AccUser* u = (const AccUser*)self->data;
-    *id = u->uid[0] ^ u->uid[1];
+    *id = grid0_on() && grid0_account_id() ? grid0_account_id() : u->uid[0] ^ u->uid[1];
     R_SUCCEED();
 }
+/* the birthday at the record's start: the SDK's GetBirthday reads a date there, and all zeros is none, which turns
+   Splatoon 3's plaza posts away (GRID0-citron 3c93e8e16d, after NextendoNetwork's citron d8cdcd9) */
 static int nn_account_baas_IManagerForApplication_GetNintendoAccountUserResourceCacheForApplication(SvcObj* self,
                                                                                                    IpcBuf base,
                                                                                                    IpcBuf extra,
                                                                                                    u64* id) {
+    static const char birthday[] = "2000-01-01";
     memset(GP(base.addr), 0, (size_t)base.size);
+    if (grid0_on() && base.size >= sizeof birthday) memcpy(GP(base.addr), birthday, sizeof birthday);
     memset(GP(extra.addr), 0, (size_t)extra.size);
     /* the online account's id (`NintendoAccountId`), which a console keeps apart from the network service account's:
        the same one here, as there is no account behind either */
     return nn_account_baas_IManagerForApplication_GetAccountId(self, id);
 }
+static int nn_account_baas_IManagerForApplication_GetNintendoAccountUserResourceCache(SvcObj* self, IpcBuf base,
+                                                                                      IpcBuf extra, u64* id) {
+    return nn_account_baas_IManagerForApplication_GetNintendoAccountUserResourceCacheForApplication(self, base, extra,
+                                                                                                    id);
+}
+/* With GRID0+, signed in (waiting for it the first time, grid0.c): done, with the sign-in's result. Without, failed
+   as a console without a network */
 static int nn_account_baas_IManagerForApplication_EnsureIdTokenCacheAsync(SvcObj* self, SvcObj** context) {
     (void)self;
     *context = nn_account_detail_IAsyncContext_new();
+    (*context)->u[0] = (u64)(u32)(grid0_on() && !grid0_sign_in() ? 0 : ACC_NOT_CONNECTED);
+    R_SUCCEED();
+}
+/* the id token: GRID0+'s, or none */
+static int nn_account_baas_IManagerForApplication_LoadIdTokenCache(SvcObj* self, IpcBuf token, u32* size) {
+    char text[GRID0_TOKEN_MAX];
+    size_t n = grid0_on() ? grid0_id_token(text, sizeof text) : 0;
+    (void)self;
+    if (n > token.size) {
+        WARN("acc: the id token is %u bytes, the game's buffer %u\n", (unsigned)n, (unsigned)token.size);
+        n = 0;
+    }
+    if (n) memcpy(GP(token.addr), text, n);
+    *size = (u32)n;
+    if (grid0_on() && !n) WARN("acc: the game asked for its id token and got none: it reports a sign-in error\n");
+    R_SUCCEED();
+}
+static int nn_account_baas_IManagerForApplication_LoadIdTokenCacheDeprecated(SvcObj* self, IpcBuf token, u32* size) {
+    return nn_account_baas_IManagerForApplication_LoadIdTokenCache(self, token, size);
+}
+static int nn_account_baas_IManagerForApplication_LoadNetworkServiceLicenseKindAsync(SvcObj* self, SvcObj** context) {
+    (void)self;
+    *context = nn_account_detail_IAsyncNetworkServiceLicenseKindContext_new();
     R_SUCCEED();
 }
 
-/* ============================================================ IAsyncContext: done at once, failed */
+/* ============================================================ IAsyncContext: done at once */
 static int nn_account_detail_IAsyncContext_GetSystemEvent(SvcObj* self, u32* event) {
     (void)self;
     return new_event(event, "acc async context", 1);
@@ -230,9 +266,28 @@ static int nn_account_detail_IAsyncContext_HasDone(SvcObj* self, u8* done) {
     *done = 1;
     R_SUCCEED();
 }
-static int nn_account_detail_IAsyncContext_GetResult(SvcObj* self) {
+static int nn_account_detail_IAsyncContext_GetResult(SvcObj* self) { return (int)(u32)self->u[0]; }
+
+/* ============================================================ IAsyncNetworkServiceLicenseKindContext */
+static int nn_account_detail_IAsyncNetworkServiceLicenseKindContext_GetSystemEvent(SvcObj* self, u32* event) {
     (void)self;
-    R_THROW(ACC_NOT_CONNECTED);
+    return new_event(event, "acc license kind", 1);
+}
+static int nn_account_detail_IAsyncNetworkServiceLicenseKindContext_HasDone(SvcObj* self, u8* done) {
+    (void)self;
+    *done = 1;
+    R_SUCCEED();
+}
+static int nn_account_detail_IAsyncNetworkServiceLicenseKindContext_GetResult(SvcObj* self) {
+    (void)self;
+    return grid0_on() ? 0 : ACC_NOT_CONNECTED;
+}
+/* nn::account::NetworkServiceLicenseKind: 1, a member, with GRID0+, which has no subscription to check */
+static int nn_account_detail_IAsyncNetworkServiceLicenseKindContext_GetNetworkServiceLicenseKind(SvcObj* self,
+                                                                                                 u32* kind) {
+    (void)self;
+    *kind = grid0_on() ? 1 : 0;
+    R_SUCCEED();
 }
 
 SvcObj* new_acc(void) { return nn_account_IAccountServiceForApplication_new(); }

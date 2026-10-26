@@ -75,8 +75,9 @@ static int room_password(const char* dir, char* password, size_t size, char* why
             snprintf(why, why_size, "%s: [%s] is not a section: the file has none", path, ini.section);
             goto done;
         }
+        if (!strcmp(key, "grid0_password")) continue; /* inkypaint's GRID0+ password (grid0.c) */
         if (strcmp(key, "room_password")) {
-            snprintf(why, why_size, "%s: %s is not a setting: room_password", path, key);
+            snprintf(why, why_size, "%s: %s is not a setting: room_password or grid0_password", path, key);
             goto done;
         }
         if (strlen(value) >= size) {

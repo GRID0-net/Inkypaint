@@ -3,6 +3,7 @@
 /* the services sm hands out, registered under their names, and the events the service files give the game */
 #include "nx/hle/services/services_int.h"
 #include "nx/hle/services/network/network.h"
+#include "nx/hle/services/network/grid0.h"
 #include "hle/services/sm.swipc.h"
 #include "hle/services/am.swipc.h"
 #include "hle/services/set.swipc.h"
@@ -15,6 +16,7 @@
 #include "hle/services/network/dns.swipc.h"
 #include "hle/services/network/nifm.swipc.h"
 #include "hle/services/network/ssl.swipc.h"
+#include "hle/services/network/friends.swipc.h"
 
 /* ============================================================ events */
 /* a handle to e for a reply: the handle takes its own reference */
@@ -49,6 +51,7 @@ void svc_core_init(void) {
     time_init();
     network_init();
     network_room_init(); /* after the users: the room knows this console by the nickname of the one playing */
+    grid0_init();        /* inkypaint: GRID0+, the online play's server, signs in in the background */
 
     nn_sm_detail_IUserInterface_register(new_sm);
     nn_am_service_IApplicationProxyService_register(new_appletoe);

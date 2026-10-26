@@ -37,6 +37,12 @@ room support (`net_room.c`, `docs/NETWORKING.md`), which also lets inkypaint mee
 online multiplayer. The console's official online servers are out of scope: they need a console's credentials, and
 connecting a modified client to them breaks the service's terms and gets accounts banned.
 
+Online play itself goes through GRID0+, the community's replacement servers (a SwitchNet server), with a GRID0+
+account instead of a console's. Done: the name redirect, the ssl service's certificate list built from the host's
+trusted roots (no firmware), the account's id token and the friend service (`grid0.c`, `friends.c`), and the
+launcher's Online page (sign-in, friends, requests, GRID0+'s game patches as mods). Next: a run through a Turf War
+and a private battle with friends, and BCAT's news and festival data from the server.
+
 ## Later
 
 - Higher internal resolution, uncapped frame rate where the game's logic allows it.

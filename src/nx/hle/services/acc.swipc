@@ -42,23 +42,40 @@ interface nn::account::profile::IProfile {
     [11] LoadImage(buffer<u8, 6> image) -> u32 size;
 }
 
-# the user's network service account: there, but its id token never arrives
+# the user's network service account: with GRID0+ (inkypaint's grid0.c) the account signed in there, its id token
+# the server's; without, there, but its id token never arrives
 interface nn::account::baas::IManagerForApplication {
     @stub [0] CheckAvailability();
     [1] GetAccountId() -> nn::account::NetworkServiceAccountId id;
     [2] EnsureIdTokenCacheAsync() -> object<nn::account::detail::IAsyncContext> context;
-    @stub [3] LoadIdTokenCache(buffer<u8, 6> token) -> u32 size;
-    # the online account's cached user resource: NasUserBaseForApplication (0x68 bytes) and a second buffer, both
-    # nought (none of its details is known here), and the account's id
+    [3] LoadIdTokenCacheDeprecated(buffer<u8, 6> token) -> u32 size;
+    # 19.0.0+, which a game built for it sends instead of 3
+    [4] LoadIdTokenCache(buffer<u8, 6> token) -> u32 size;
+    # the online account's cached user resource: NasUserBaseForApplication (0x68 bytes), whose start is the birthday
+    # (the SDK's GetBirthday), a second buffer, nought, and the account's id
     [130] GetNintendoAccountUserResourceCacheForApplication(buffer<nn::account::NasUserBaseForApplication, 0x1a> base,
                                                             buffer<u8, 6> extra) -> u64 id;
+    # 19.0.0+, the same
+    [136] GetNintendoAccountUserResourceCache(buffer<nn::account::NasUserBaseForApplication, 0x1a> base,
+                                              buffer<u8, 6> extra) -> u64 id;
     @stub [160] StoreOpenContext();
+    [170] LoadNetworkServiceLicenseKindAsync()
+        -> object<nn::account::detail::IAsyncNetworkServiceLicenseKindContext> context;
 }
 
-# an operation that needs the network: done at once, and failed the way nifm fails here, since there is no network
+# an operation that needs the network, done at once: its Result is the object's (u[0]), the way nifm fails here
+# without GRID0+
 interface nn::account::detail::IAsyncContext {
     [0] GetSystemEvent() -> handle<copy, event> event;
     @stub [1] Cancel();
     [2] HasDone() -> b8 done;
     [3] GetResult();
+}
+# 6.0.0+: the online play subscription, a member's with GRID0+
+interface nn::account::detail::IAsyncNetworkServiceLicenseKindContext {
+    [0] GetSystemEvent() -> handle<copy, event> event;
+    @stub [1] Cancel();
+    [2] HasDone() -> b8 done;
+    [3] GetResult();
+    [4] GetNetworkServiceLicenseKind() -> u32 kind;
 }

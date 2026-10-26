@@ -14,9 +14,19 @@
    has no name for. Eden's ssl.cpp forces the verify option to 0 and swaps SetOption's arguments; neither is done
    here. */
 #include "nx/hle/services/network/network.h"
+#include "nx/hle/services/network/grid0.h"
 #include "nx/hle/hle.h"
 #include "hle/services/network/ssl.swipc.inc"
 #include <limits.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+/* the system's trusted roots (system_roots), before OpenSSL's headers as wincrypt.h is */
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/SecCertificate.h>
+#include <Security/SecTrust.h>
+#endif
+#endif
 #ifdef _WIN32
 /* before OpenSSL's headers, which undefine the names wincrypt.h's macros take (X509_NAME) */
 #include <wincrypt.h>
@@ -125,6 +135,30 @@ static const char* system_roots(void) {
     CertCloseStore(h, 0);
     return "the system's ROOT store";
 }
+#elif defined(__APPLE__) && TARGET_OS_OSX
+/* inkypaint: the Mac's own trust, the anchors of its system roots keychain (what Safari and URLSession trust) */
+static const char* system_roots(void) {
+    CFArrayRef anchors = NULL;
+    CFIndex i, n;
+    if (SecTrustCopyAnchorCertificates(&anchors) != errSecSuccess || !anchors) {
+        g_hle.ssl.roots = load_bundle("/etc/ssl/cert.pem");
+        return "/etc/ssl/cert.pem";
+    }
+    g_hle.ssl.roots = sk_X509_new_null();
+    n = CFArrayGetCount(anchors);
+    for (i = 0; g_hle.ssl.roots && i < n; i++) {
+        CFDataRef der = SecCertificateCopyData((SecCertificateRef)CFArrayGetValueAtIndex(anchors, i));
+        const unsigned char* p;
+        X509* x;
+        if (!der) continue;
+        p = CFDataGetBytePtr(der);
+        x = d2i_X509(NULL, &p, (long)CFDataGetLength(der));
+        if (x && !sk_X509_push(g_hle.ssl.roots, x)) X509_free(x);
+        CFRelease(der);
+    }
+    CFRelease(anchors);
+    return "the system's root certificates (Keychain)";
+}
 #else
 static const char* system_roots(void) {
     static const char* const bundles[] = {
@@ -141,6 +175,157 @@ static const char* system_roots(void) {
     return g_hle.ssl.roots_dir;
 }
 #endif
+
+/* ============================================================ the console's certificate store */
+/* nn::ssl::sf::CaCertificateId (Switchbrew's SSL services page) and the public root each names, by its subject's CN
+   or, for the roots without one or sharing one (GlobalSign's), its OU. GetCertificates hands a game the console's
+   roots by these ids, from the system archive that firmware brings. inkypaint has no firmware: the ids are the
+   host's own roots, matched here, so a game that builds its own TLS's trust from them (Splatoon 3's gRPC client,
+   which gives up without one) finds the roots it would on a console. The console maker's own CAs (1 to 3) the host
+   hasn't */
+static const struct {
+    i32 id;
+    const char* name;
+} builtin_names[] = {
+    {1000, "Amazon Root CA 1"},
+    {1001, "Starfield Services Root Certificate Authority - G2"},
+    {1002, "AddTrust External CA Root"},
+    {1003, "COMODO Certification Authority"},
+    {1004, "UTN - DATACorp SGC"},
+    {1005, "UTN-USERFirst-Hardware"},
+    {1006, "Baltimore CyberTrust Root"},
+    {1007, "Cybertrust Global Root"},
+    {1008, "Verizon Global Root CA"},
+    {1009, "DigiCert Assured ID Root CA"},
+    {1010, "DigiCert Assured ID Root G2"},
+    {1011, "DigiCert Global Root CA"},
+    {1012, "DigiCert Global Root G2"},
+    {1013, "DigiCert High Assurance EV Root CA"},
+    {1014, "Entrust.net Certification Authority (2048)"},
+    {1015, "Entrust Root Certification Authority"},
+    {1016, "Entrust Root Certification Authority - G2"},
+    {1017, "GeoTrust Global CA 2"},
+    {1018, "GeoTrust Global CA"},
+    {1019, "GeoTrust Primary Certification Authority - G3"},
+    {1020, "GeoTrust Primary Certification Authority"},
+    {1021, "GlobalSign Root CA"},
+    {1022, "GlobalSign Root CA - R2"},
+    {1023, "GlobalSign Root CA - R3"},
+    {1024, "Go Daddy Class 2 Certification Authority"},
+    {1025, "Go Daddy Root Certificate Authority - G2"},
+    {1026, "Starfield Class 2 Certification Authority"},
+    {1027, "Starfield Root Certificate Authority - G2"},
+    {1028, "thawte Primary Root CA - G3"},
+    {1029, "thawte Primary Root CA"},
+    {1030, "VeriSign Class 3 Public Primary Certification Authority - G3"},
+    {1031, "VeriSign Class 3 Public Primary Certification Authority - G5"},
+    {1032, "VeriSign Universal Root Certification Authority"},
+    {1033, "DST Root CA X3"},
+    {1034, "USERTrust RSA Certification Authority"},
+    {1035, "ISRG Root X1"},
+    {1036, "USERTrust ECC Certification Authority"},
+    {1037, "COMODO RSA Certification Authority"},
+    {1038, "COMODO ECC Certification Authority"},
+    {1039, "Amazon Root CA 2"},
+    {1040, "Amazon Root CA 3"},
+    {1041, "Amazon Root CA 4"},
+    {1042, "DigiCert Assured ID Root G3"},
+    {1043, "DigiCert Global Root G3"},
+    {1044, "DigiCert Trusted Root G4"},
+    {1045, "Entrust Root Certification Authority - EC1"},
+    {1046, "Entrust Root Certification Authority - G4"},
+    {1047, "GlobalSign ECC Root CA - R4"},
+    {1048, "GlobalSign ECC Root CA - R5"},
+    {1049, "GlobalSign Root CA - R6"},
+    {1050, "GTS Root R1"},
+    {1051, "GTS Root R2"},
+    {1052, "GTS Root R3"},
+    {1053, "GTS Root R4"},
+    {1054, "Security Communication RootCA1"},
+    {1055, "GlobalSign Root E46"},
+    {1056, "GlobalSign Root R46"},
+    {1057, "T-TeleSec GlobalRoot Class 2"},
+    {1058, "DigiCert TLS ECC P384 Root G5"},
+    {1059, "DigiCert TLS RSA4096 Root G5"},
+};
+#define CERT_ID_ALL   (-1)
+#define CERT_ID_GRID0 0x7E000000 /* outside the console's numbering: GRID0+'s CA (Citrosis's id) */
+#define CERT_TRUSTED  1          /* TrustedCertStatus EnabledTrusted */
+#define CERT_INVALID  (-1)
+
+static int subject_is(X509* x, int nid, const char* name) {
+    const X509_NAME* subject = X509_get_subject_name(x);
+    int i = -1;
+    while ((i = X509_NAME_get_index_by_NID(subject, nid, i)) >= 0) {
+        const ASN1_STRING* v = X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject, i));
+        if ((size_t)ASN1_STRING_length(v) == strlen(name) && !memcmp(ASN1_STRING_get0_data(v), name, strlen(name)))
+            return 1;
+    }
+    return 0;
+}
+/* each id's root in g_hle.ssl.roots, found once */
+static void builtin_init(void) {
+    size_t i;
+    int j;
+    for (i = 0; i < sizeof builtin_names / sizeof builtin_names[0]; i++)
+        for (j = 0; j < sk_X509_num(g_hle.ssl.roots) && j + 1 != g_hle.ssl.grid0_root; j++) {
+            X509* x = sk_X509_value(g_hle.ssl.roots, j);
+            if (!subject_is(x, NID_commonName, builtin_names[i].name) &&
+                !subject_is(x, NID_organizationalUnitName, builtin_names[i].name))
+                continue;
+            g_hle.ssl.builtin[g_hle.ssl.builtin_count].id = builtin_names[i].id;
+            g_hle.ssl.builtin[g_hle.ssl.builtin_count].root = j;
+            g_hle.ssl.builtin_count++;
+            break;
+        }
+}
+/* the root an entry of the list stands for: the builtin index's, or GRID0+'s for -1 */
+static X509* builtin_root(int k) {
+    return sk_X509_value(g_hle.ssl.roots, k < 0 ? g_hle.ssl.grid0_root - 1 : g_hle.ssl.builtin[k].root);
+}
+/* The certificates ids names (one -1: all of them), GRID0+'s CA after them while it is on, laid out as the console's
+   GetCertificates writes them: BuiltInCertificateInfo {i32 id, i32 status, u64 size, u64 offset} each and one with
+   id -1 to end them, then each one's DER at its offset from the start. Written to out when it isn't NULL (cap bytes,
+   which must hold them). Returns the size GetCertificateBufSize answers (each DER rounded up to 4, as the console's),
+   *count the certificates' number */
+static u32 cert_list(const i32* ids, u32 n, u8* out, u32 cap, u32* count) {
+    int pick[64 + 1];
+    u32 picked = 0, i, size, at;
+    int k;
+    for (k = 0; k < (int)g_hle.ssl.builtin_count; k++) {
+        int want = n == 1 && ids[0] == CERT_ID_ALL;
+        for (i = 0; i < n && !want; i++) want = ids[i] == g_hle.ssl.builtin[k].id;
+        if (want) pick[picked++] = k;
+    }
+    if (g_hle.ssl.grid0_root) pick[picked++] = -1; /* every request gets it, as Citrosis's */
+    size = CERT_INFO_SIZE * (picked + 1);
+    at = size;
+    for (i = 0; i < picked; i++) {
+        X509* x = builtin_root(pick[i]);
+        int len = i2d_X509(x, NULL);
+        if (len < 0) len = 0;
+        if (out && at + (u32)len <= cap) {
+            u8* e = out + CERT_INFO_SIZE * i;
+            u8* p = out + at;
+            snx_st_le32(e, (u32)(pick[i] < 0 ? CERT_ID_GRID0 : g_hle.ssl.builtin[pick[i]].id));
+            snx_st_le32(e + 4, CERT_TRUSTED);
+            snx_st_le64(e + 8, (u64)len);
+            snx_st_le64(e + 16, at);
+            i2d_X509(x, &p);
+        }
+        at += (u32)len;
+        size += ((u32)len + 3) & ~3u;
+    }
+    if (out) {
+        u8* e = out + CERT_INFO_SIZE * picked;
+        snx_st_le32(e, (u32)CERT_ID_ALL);
+        snx_st_le32(e + 4, (u32)CERT_INVALID);
+        snx_st_le64(e + 8, 0);
+        snx_st_le64(e + 16, 0);
+    }
+    *count = picked;
+    return size;
+}
 
 static int bio_write(BIO* b, const char* data, size_t size, size_t* written);
 static int bio_read(BIO* b, char* data, size_t size, size_t* got);
@@ -161,8 +346,19 @@ static void ssl_init(void) {
         from = dir;
     }
     if (!(file && *file) && !g_hle.ssl.roots_dir[0]) from = system_roots();
+    {
+        /* inkypaint: GRID0+'s CA, as a console set up for it trusts it system wide */
+        size_t size;
+        const unsigned char* der = grid0_ca(&size);
+        X509* ca = der ? d2i_X509(NULL, &der, (long)size) : NULL;
+        if (ca && !g_hle.ssl.roots) g_hle.ssl.roots = sk_X509_new_null();
+        if (ca && (!g_hle.ssl.roots || !sk_X509_push(g_hle.ssl.roots, ca))) X509_free(ca);
+        g_hle.ssl.grid0_root = ca && g_hle.ssl.roots ? sk_X509_num(g_hle.ssl.roots) : 0;
+    }
+    builtin_init();
     ERR_clear_error();
-    LOG("ssl: root certificates from %s (%d read)\n", from, g_hle.ssl.roots ? sk_X509_num(g_hle.ssl.roots) : 0);
+    LOG("ssl: root certificates from %s (%d read, %u of the console's ids)\n", from,
+        g_hle.ssl.roots ? sk_X509_num(g_hle.ssl.roots) : 0, g_hle.ssl.builtin_count);
     g_hle.ssl.bio = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "snx socket");
     if (!g_hle.ssl.bio || !BIO_meth_set_write_ex(g_hle.ssl.bio, bio_write) || !BIO_meth_set_read_ex(g_hle.ssl.bio, bio_read) ||
         !BIO_meth_set_ctrl(g_hle.ssl.bio, bio_ctrl) || !BIO_meth_set_create(g_hle.ssl.bio, bio_create))
@@ -308,21 +504,36 @@ static void info_cb(const SSL* ssl, int where, int ret) {
 /* before the handshake: what the context holds now (its store and client certificate), the name, and the options */
 static void conn_prepare(SslConn* c) {
     SslContext* x = c->context->data;
-    int ip = 0;
+    SnxSockAddr peer;
+    uint8_t named[4];
+    char console_host[SSL_HOST_MAX + 1];
+    const char* name = c->host;
+    int ip = 0, redirected = 0;
     pm_lock(&x->lk);
     SSL_set1_verify_cert_store(c->ssl, x->store);
     if (x->client_cert) SSL_use_cert_and_key(c->ssl, x->client_cert, x->client_key, x->client_chain, 1);
     pm_unlock(&x->lk);
-    if (c->host[0]) {
-        ip = SSL_set1_ipaddr(c->ssl, c->host);
+    /* inkypaint: a connection to GRID0+ names the console's host it stands in for, which the server routes on, even
+       when the game named the address its lookup gave */
+    if (!snx_socket_peer(c->s, &peer) && peer.family == SNX_AF_INET &&
+        grid0_host_for(peer.addr, console_host, sizeof console_host)) {
+        redirected = 1;
+        if (!c->host[0] || snx_net_parse_ipv4(c->host, named)) name = console_host;
+    }
+    if (name[0]) {
+        ip = SSL_set1_ipaddr(c->ssl, name);
         /* no server name for an address (RFC 6066) */
         if (!ip) {
-            SSL_set_tlsext_host_name(c->ssl, c->host);
-            SSL_set1_dnsname(c->ssl, c->host);
+            SSL_set_tlsext_host_name(c->ssl, name);
+            SSL_set1_dnsname(c->ssl, name);
         }
     }
     if (c->renegotiation == RENEGOTIATION_NONE) SSL_set_options(c->ssl, SSL_OP_NO_RENEGOTIATION);
     if (!c->option[OPT_ENABLE_ALPN]) SSL_set_alpn_protos(c->ssl, NULL, 0);
+    /* GRID0+ serves NEX over a WebSocket upgrade, which HTTP/2 breaks: other than NPLN's gRPC, which needs the
+       HTTP/2 it asks for, a connection to it offers HTTP/1.1 alone (Citrosis, after citron-nextendo) */
+    if (redirected && c->option[OPT_ENABLE_ALPN] && !strstr(name, "npln") && !strstr(name, "gs.nintendo.net"))
+        SSL_set_alpn_protos(c->ssl, (const unsigned char*)"\x08http/1.1", 9);
     ERR_clear_error();
 }
 enum { OP_HANDSHAKE, OP_READ, OP_PEEK, OP_WRITE };
@@ -871,15 +1082,22 @@ static int nn_ssl_sf_ISslService_GetContextCount(SvcObj* self, u32* count) {
     R_SUCCEED();
 }
 /* No system archive, so no built-in certificates: the buffer holds just the terminating entry {-1, -1, 0, 0} */
+/* the console's roots, by the ids asked for: the host's own, matched to them (cert_list), and GRID0+'s CA */
 static int nn_ssl_sf_ISslService_GetCertificates(SvcObj* self, IpcBuf certificates, IpcBuf ids, u32* count) {
-    u32 end[6] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0, 0, 0, 0};
-    R_UNLESS(certificates.addr && certificates.size >= CERT_INFO_SIZE, SSLSRV_RC(SSLSRV_CERT_BUFFER_TOO_SMALL));
-    memcpy(GP(certificates.addr), end, CERT_INFO_SIZE);
-    *count = 0;
+    u32 n = ids.addr ? (u32)(ids.size / 4) : 0, size;
+    const i32* list = n ? (const i32*)GP(ids.addr) : NULL;
+    ssl_init();
+    size = cert_list(list, n, NULL, 0, count);
+    R_UNLESS(certificates.addr && certificates.size >= size, SSLSRV_RC(SSLSRV_CERT_BUFFER_TOO_SMALL));
+    cert_list(list, n, GP(certificates.addr), (u32)certificates.size, count);
+    LOG("ssl: GetCertificates(%u ids%s): %u certificates, %u bytes\n", n,
+        n == 1 && list[0] == CERT_ID_ALL ? ", all" : "", *count, size);
     R_SUCCEED();
 }
 static int nn_ssl_sf_ISslService_GetCertificateBufSize(SvcObj* self, IpcBuf ids, u32* size) {
-    *size = CERT_INFO_SIZE;
+    u32 n = ids.addr ? (u32)(ids.size / 4) : 0, count;
+    ssl_init();
+    *size = cert_list(n ? (const i32*)GP(ids.addr) : NULL, n, NULL, 0, &count);
     R_SUCCEED();
 }
 SvcObj* new_ssl(void) { return nn_ssl_sf_ISslService_new(); }

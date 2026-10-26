@@ -385,7 +385,7 @@ snx_test_target(snx-test-fake-room 23)
 target_link_libraries(snx-test-fake-room PUBLIC scarletnx-net snx_enet)
 
 # sfdnsres and nifm (dns.c, nifm.c) offline, with bsd.c beside them for whether the console is online
-add_executable(snx-test-network-service network_service.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/network/bsd.c"
+add_executable(snx-test-network-service network_service.c grid0_off.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/network/bsd.c"
     own_stub.c)
 snx_test_target(snx-test-network-service 23)
 snx_service_swipc(snx-test-network-service hle/services/network/bsd.swipc hle/services/network/dns.swipc
@@ -431,7 +431,7 @@ add_test(NAME room_service COMMAND snx-test-room-service)
 # ssl (ssl.c) against a TLS server in the test, on the game's bsd sockets (bsd.c, built beside). OpenSSL comes with
 # the NX, 3DS and hactool builds (cmake/dependencies.cmake), not with a GNU ABI-only one
 if(TARGET OpenSSL::SSL)
-    add_executable(snx-test-ssl-service ssl_service.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/network/bsd.c"
+    add_executable(snx-test-ssl-service ssl_service.c grid0_off.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/network/bsd.c"
     own_stub.c)
     snx_test_target(snx-test-ssl-service 23)
         snx_service_swipc(snx-test-ssl-service hle/services/network/bsd.swipc hle/services/network/ssl.swipc)
@@ -443,7 +443,15 @@ endif()
 # mm:u and the smaller services, hid's IHidServer and acc (misc.c, hid.c, acc.c, whose user picture snx_splash draws),
 # with the kernel objects stubbed
 if(TARGET OpenSSL::Crypto AND NOT SNX_TOOLS_ONLY)
-    add_executable(snx-test-misc-service misc_service.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/hid_touch.c"
+    # GRID0+ (grid0.c) and the friend service on it (friends.c), against a TLS server in the test on the loopback
+    add_executable(snx-test-grid0-service grid0_service.c own_stub.c)
+    snx_test_target(snx-test-grid0-service 23)
+    snx_service_swipc(snx-test-grid0-service hle/services/network/friends.swipc)
+    target_link_libraries(snx-test-grid0-service PRIVATE scarletnx-ldn OpenSSL::SSL hactool_lib scarletnx-common)
+    add_test(NAME grid0_service COMMAND snx-test-grid0-service)
+    set_tests_properties(grid0_service PROPERTIES TIMEOUT 60)
+
+    add_executable(snx-test-misc-service misc_service.c grid0_off.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/hid_touch.c"
         "${PROJECT_SOURCE_DIR}/src/nx/hle/services/hid_motion.c")
     snx_test_target(snx-test-misc-service 23)
         snx_service_swipc(snx-test-misc-service hle/services/hid.swipc hle/services/misc.swipc hle/services/acc.swipc)
@@ -478,7 +486,7 @@ add_test(NAME am_nacp COMMAND snx-test-am-nacp)
 # acc.c and users.c: the console's users from users/users.ini, as acc lists them, every file that lists none refused,
 # and the picture of a user with none of its own, Wimsy as a 256x256 JPEG (the splash's drawing), decoded by plutovg
 if(NOT SNX_TOOLS_ONLY)
-    add_executable(snx-test-acc-service acc_service.c)
+    add_executable(snx-test-acc-service acc_service.c grid0_off.c)
     snx_test_target(snx-test-acc-service 23)
     snx_service_swipc(snx-test-acc-service hle/services/acc.swipc)
     target_link_libraries(snx-test-acc-service PRIVATE snx_splash scarletnx-common)

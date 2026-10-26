@@ -62,7 +62,6 @@ SvcObj* new_hwopus(void);
 SvcObj* new_apm(void);
 SvcObj* new_lm(void);
 SvcObj* new_pctl(void);
-SvcObj* new_friend(void);
 SvcObj* new_ns(void);
 SvcObj* new_prepo(void);
 SvcObj* new_psm(void);

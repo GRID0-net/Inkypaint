@@ -472,6 +472,34 @@ setting Eden room
     set options_room_set
     help The Eden room ldn=room joins: host or host:port (port 24872 without one). The nickname there is the user's,
     help and a room's password is room_password in users/online.ini
+setting GRID0+
+    key grid0
+    int 0 1
+    default 0
+    startup
+    words Off|On
+    help 1 = online play on GRID0+ (inkypaint): the console's server names resolve to grid0_server, the game's TLS trusts its CA,
+    help and the account and friend services sign in as grid0_user. Needs network=1, and the password: the
+    help launcher's, or grid0_password in users/online.ini
+setting GRID0+ server
+    key grid0_server
+    text 256
+    default "89.168.58.206"
+    startup
+    help The GRID0+ server: host or host:port (443 without one)
+setting GRID0+ NAT address
+    key grid0_nat
+    text 64
+    default ""
+    startup
+    help The second address Pia's NAT check reaches (nncs2). Empty: GRID0+'s second address (145.241.167.178) with the
+    help default server, the server's own with another
+setting GRID0+ user
+    key grid0_user
+    text 128
+    default ""
+    startup
+    help The GRID0+ account's user name, the one the GRID0+ Discord bot's /register gave
 
 table g_user_ini
 setting User

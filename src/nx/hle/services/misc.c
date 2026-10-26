@@ -13,7 +13,7 @@
    src/core/hle/service/mii/types/raw_data.cpp, and StoreData's checksums from Ryubing's
    src/Ryujinx.HLE/HOS/Services/Mii/Helper.cs and Types/StoreData.cs:
    SPDX-FileCopyrightText: Ryujinx Team and Contributors (MIT) */
-/* The smaller services: apm, lm, pctl, friend, ns, prepo, caps, ectx, psm, fatal, csrng, spl, mm, nfp, nfc, bcat,
+/* The smaller services: apm, lm, pctl, ns, prepo, caps, ectx, psm, fatal, csrng, spl, mm, nfp, nfc, bcat,
    aoc, irs, mii, btm and audin, each as a console offline, with no NFC device or microphone, and the add-on
    content the data folder holds */
 #include "nx/hle/services/services_int.h"
@@ -156,39 +156,6 @@ static int nn_pctl_detail_ipc_IParentalControlService_GetPlayTimerEventToRequest
 static int nn_pctl_detail_ipc_IParentalControlService_GetUnlinkedEvent(SvcObj* self, u32* event) {
     (void)self;
     return new_event(event, "pctl unlinked", 0);
-}
-
-/* ============================================================ friend */
-#define FRIEND_NO_NOTIFICATIONS RC(124, 15) /* account's NoNotifications, which friends answers too */
-
-static int nn_friends_detail_ipc_IServiceCreator_CreateFriendService(SvcObj* self, SvcObj** service) {
-    (void)self;
-    *service = nn_friends_detail_ipc_IFriendService_new();
-    R_SUCCEED();
-}
-static int nn_friends_detail_ipc_IServiceCreator_CreateNotificationService(SvcObj* self, const nn_account_Uid* uid,
-                                                                         SvcObj** service) {
-    (void)self, (void)uid;
-    *service = nn_friends_detail_ipc_INotificationService_new();
-    R_SUCCEED();
-}
-static int nn_friends_detail_ipc_IServiceCreator_CreateDaemonSuspendSessionService(SvcObj* self, SvcObj** service) {
-    (void)self;
-    *service = nn_friends_detail_ipc_IDaemonSuspendSessionService_new();
-    R_SUCCEED();
-}
-static int nn_friends_detail_ipc_IFriendService_GetCompletionEvent(SvcObj* self, u32* event) {
-    (void)self;
-    return new_event(event, "friend completion", 0);
-}
-static int nn_friends_detail_ipc_INotificationService_GetEvent(SvcObj* self, u32* event) {
-    (void)self;
-    return new_event(event, "friend notification", 0);
-}
-static int nn_friends_detail_ipc_INotificationService_Pop(SvcObj* self,
-                                                         nn_friends_detail_ipc_SizedNotificationInfo* info) {
-    (void)self, (void)info;
-    R_THROW(FRIEND_NO_NOTIFICATIONS);
 }
 
 /* ============================================================ ns */
@@ -1365,7 +1332,6 @@ static int nn_ngct_detail_IService_Filter(SvcObj* self, IpcBuf text, IpcBuf filt
 SvcObj* new_apm(void) { return nn_apm_IManager_new(); }
 SvcObj* new_lm(void) { return nn_lm_ILogService_new(); }
 SvcObj* new_pctl(void) { return nn_pctl_detail_ipc_IParentalControlServiceFactory_new(); }
-SvcObj* new_friend(void) { return nn_friends_detail_ipc_IServiceCreator_new(); }
 SvcObj* new_ns(void) { return nn_ns_detail_IServiceGetterInterface_new(); }
 SvcObj* new_prepo(void) { return nn_prepo_detail_ipc_IPrepoService_new(); }
 SvcObj* new_psm(void) { return nn_psm_IPsmServer_new(); }

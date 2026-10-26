@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the inkypaint contributors
+# friend (friends.c): the friends of the GRID0+ account signed in (grid0.c), none without GRID0+. Names and layouts
+# from Switchbrew's Friend services page and GRID0-Citrosis's friend.cpp
+
+type nn::friends::detail::ipc::SizedFriendFilter = bytes<0x10, 8>;
+type nn::friends::detail::ipc::SizedNotificationInfo = bytes<0x10, 8>;
+type nn::friends::detail::FriendImpl = bytes<0x200>;
+
+interface nn::friends::detail::ipc::IServiceCreator is friend:u, friend:v, friend:a {
+    [0] CreateFriendService() -> object<nn::friends::detail::ipc::IFriendService> service;
+    [1] CreateNotificationService(nn::account::Uid uid)
+        -> object<nn::friends::detail::ipc::INotificationService> service;
+    [2] CreateDaemonSuspendSessionService()
+        -> object<nn::friends::detail::ipc::IDaemonSuspendSessionService> service;
+}
+# every command answers at once, and signals the completion event the SDK's asynchronous calls wait on
+interface nn::friends::detail::ipc::IFriendService {
+    [0] GetCompletionEvent() -> handle<copy, event> event;
+    @stub [1] Cancel();
+    [10100] GetFriendListIds(i32 offset, nn::account::Uid uid, nn::friends::detail::ipc::SizedFriendFilter filter,
+                             pid, array<nn::account::NetworkServiceAccountId, 0xa> ids) -> i32 count;
+    [10101] GetFriendList(i32 offset, nn::account::Uid uid, nn::friends::detail::ipc::SizedFriendFilter filter,
+                          pid, array<nn::friends::detail::FriendImpl, 6> friends) -> i32 count;
+    [10102] UpdateFriendInfo(nn::account::Uid uid, pid, array<nn::account::NetworkServiceAccountId, 9> ids,
+                             array<nn::friends::detail::FriendImpl, 6> friends);
+    [10110] GetFriendProfileImage(nn::account::Uid uid, nn::account::NetworkServiceAccountId id, buffer<u8, 6> image)
+        -> u32 size;
+    [10120] CheckFriendListAvailability(nn::account::Uid uid) -> b8 available;
+    [10121] EnsureFriendListAvailable(nn::account::Uid uid);
+    [10600] DeclareOpenOnlinePlaySession(nn::account::Uid uid);
+    [10601] DeclareCloseOnlinePlaySession(nn::account::Uid uid);
+    # nn::friends::detail::UserPresenceImpl (0xE0): the status at 0x18, the game's key-value storage from 0x20
+    [10610] UpdateUserPresence(nn::account::Uid uid, pid, buffer<u8, 0x19> presence);
+    [10702] AddPlayHistory(nn::account::Uid uid, pid, buffer<u8, 0x19> key, buffer<u8, 0x19> name,
+                           buffer<u8, 0x19> my_name);
+    [20100] GetFriendCount(nn::account::Uid uid, nn::friends::detail::ipc::SizedFriendFilter filter, pid)
+        -> i32 count;
+}
+interface nn::friends::detail::ipc::INotificationService {
+    [0] GetEvent() -> handle<copy, event> event;
+    [2] Pop() -> nn::friends::detail::ipc::SizedNotificationInfo info;
+}
+interface nn::friends::detail::ipc::IDaemonSuspendSessionService {
+}

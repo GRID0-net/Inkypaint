@@ -50,7 +50,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/svcgen.cmake")
 snx_svcgen(snx_kernel)
 snx_component(hle hle/services/services.c hle/services/audren.c hle/services/audren_dsp.c hle/services/pl.c hle/services/sm.c hle/services/am.c hle/services/set.c hle/services/time.c hle/services/acc.c hle/services/users.c hle/services/audio.c
               hle/services/misc.c hle/services/ldr.c hle/services/network/bsd.c hle/services/network/dns.c
-              hle/services/network/nifm.c hle/services/network/ssl.c hle/services/network/ldn.c hle/services/network/room.c hle/filesystem/fs.c hle/services/hid.c hle/services/hid_motion.c hle/services/hid_touch.c hle/services/vi.c hle/services/nvdrv.c)
+              hle/services/network/nifm.c hle/services/network/ssl.c hle/services/network/grid0.c hle/services/network/friends.c hle/services/network/ldn.c hle/services/network/room.c hle/filesystem/fs.c hle/services/hid.c hle/services/hid_motion.c hle/services/hid_touch.c hle/services/vi.c hle/services/nvdrv.c)
 # the shared fonts' stand-ins (cmake/shared_fonts.cmake), which hle/services/pl.c hands out
 target_sources(snx_hle PRIVATE "${CMAKE_BINARY_DIR}/generated/shared_fonts.c")
 # the IPC interfaces of the services (docs/IPC.md): their dispatchers are generated, the handlers are in the services'
@@ -62,13 +62,17 @@ snx_swipc(snx_hle ROOT "${CMAKE_CURRENT_SOURCE_DIR}" FILES
           hle/services/misc.swipc hle/services/am.swipc hle/services/hid.swipc
           hle/services/vi.swipc hle/services/nvdrv.swipc hle/services/network/bsd.swipc
           hle/services/network/dns.swipc hle/services/network/nifm.swipc hle/services/network/ssl.swipc
-          hle/services/network/ldn.swipc
+          hle/services/network/friends.swipc hle/services/network/ldn.swipc
           hle/filesystem/fs.swipc)
 snx_component(video gpu/video/host1x.c gpu/video/nvdec.c gpu/video/vp9_rebuild.cpp gpu/video/vic.c)
 target_link_libraries(snx_video PRIVATE FFmpeg::avcodec)
 # hwopus (hle/services/audio.c) decodes Opus with FFmpeg too; acc's user picture is a splash drawing (cmake/splash.cmake)
 include("${PROJECT_SOURCE_DIR}/cmake/splash.cmake")
 target_link_libraries(snx_hle PRIVATE FFmpeg::avcodec OpenSSL::SSL snx_splash)
+if(APPLE AND NOT IOS)
+    # inkypaint: ssl's roots are the Mac's own, from its Keychain (hle/services/network/ssl.c)
+    target_link_libraries(snx_hle PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
 snx_component(gpu gpu/gpu.c gpu/maxwell/engines.c gpu/maxwell/mme.c gpu/maxwell/mme_hle.c gpu/maxwell/mme_jit.c gpu/maxwell/compute.c gpu/maxwell/fermi2d.c gpu/maxwell/dma.c gpu/maxwell/write_pages.c gpu/maxwell/maxwell3d.c gpu/renderer.c
               gpu/nvn_trace.c gpu/shipped_pass.c)
 # mme_jit.c compiles the macros mme_hle.c has no implementation for with the LLVM backend

@@ -16,7 +16,8 @@ type nn::ssl::sf::RenegotiationMode = u32;
 type nn::ssl::sf::OptionType = u32;
 type nn::ssl::sf::AlpnProtoState = u32;
 
-interface nn::ssl::sf::ISslService is ssl {
+# ssl:s is the system's: the same commands from 0 to 9, which Splatoon 3's online client opens for its roots
+interface nn::ssl::sf::ISslService is ssl, ssl:s {
     # the raw data is {SslVersion, pad, u64 pid placeholder}: the pid slot lands at 8
     [0] CreateContext(nn::ssl::sf::SslVersion ssl_version, pid) -> object<nn::ssl::sf::ISslContext> context;
     [1] GetContextCount() -> u32 count;

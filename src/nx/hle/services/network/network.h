@@ -41,6 +41,9 @@ SvcObj* new_nifm(void);
 /* ssl.c */
 SvcObj* new_ssl(void);
 
+/* friends.c */
+SvcObj* new_friend(void);
+
 /* ldn.c */
 SvcObj* new_ldn(void);
 /* at exit: every ldn:u closes its network, so the others hear the host or the station go (an Eden in a room only
@@ -158,6 +161,77 @@ typedef struct SslConn {
     u8 option[SSL_OPT_COUNT];
     char host[SSL_HOST_MAX + 1];
 } SslConn;
+/* friends.c: IFriendService's data, its completion event */
+typedef struct {
+    u32 obj;
+    KEvent* done;
+} FriendService;
+#define FRIEND_SERVICE_MAX 64 /* the SDK opens one for each asynchronous call, and closes it after */
+typedef struct {
+    FriendService services[FRIEND_SERVICE_MAX];
+    u32 service_next;
+} HleFriends;
+
+/* grid0.c (grid0.h), with OpenSSL's types by their struct tags as ssl.c's */
+#define GRID0_TOKEN_MAX   4096 /* an id or access token, a JWT of under 1 KB (Splatoon 3's was 878 bytes) */
+#define GRID0_FRIENDS_MAX 300  /* nn::friends' limit */
+#define GRID0_FIELD_MAX   0xC0 /* a presence's app key-value storage */
+#define GRID0_IMAGES_MAX  32   /* friends' pictures kept */
+#define GRID0_IMAGE_MAX   0x40000
+struct Grid0Friend {
+    u64 nsa_id;
+    u64 title_id; /* what the friend plays, 0 for nothing */
+    u32 status;   /* nn::friends: 0 offline, 1 online, 2 online play */
+    u32 field_size;
+    u8 favorite;
+    char nickname[0x21];
+    u8 field[GRID0_FIELD_MAX];
+    char image_url[256];
+};
+typedef struct Grid0Image {
+    u64 nsa_id;
+    u32 size;
+    int state;           /* 0 a free slot, 1 wanted, 2 downloaded, 3 none to be had */
+    unsigned char* jpeg; /* size bytes, the slot's own */
+} Grid0Image;
+typedef struct {
+    PMutex lk;        /* everything below */
+    PMutex sign_lk;   /* one sign-in at a time, held across its request */
+    PCond cv;         /* the worker's wakeups, and fetches finished */
+    int on;           /* grid0=1 with a user and a password */
+    int worker;       /* the worker thread runs */
+    u16 port;         /* the server's HTTPS port */
+    u8 ip[4];         /* the server's address */
+    u8 ip2[4];        /* the NAT check's second address, the server's own when none */
+    char server[256]; /* the server's host, as grid0_server names it */
+    char password[256];
+    char answered[2][256]; /* the console's server name last answered with ip and ip2 */
+    struct ssl_ctx_st* ctx;
+    struct bio_method_st* bio;
+    unsigned char ca[2048];
+    size_t ca_size;
+    /* the sign-in */
+    char id_token[GRID0_TOKEN_MAX];
+    char access_token[GRID0_TOKEN_MAX];
+    i64 expiry;     /* the id token's exp, Unix seconds */
+    u64 account_id; /* its subject */
+    u64 failed_ns;  /* when the last sign-in failed, 0 after one that didn't */
+    char failure[256];
+    /* the friends */
+    struct Grid0Friend friends[GRID0_FRIENDS_MAX];
+    u32 friend_count;
+    int have_friends; /* a fetch has succeeded */
+    int want_friends; /* the game asked: the worker keeps the list fresh */
+    int warm_waited;
+    u64 fetches; /* fetches finished, whatever their outcome */
+    u64 fetched_ns;
+    /* the presence: the body to send ("" until the game sets one), what the server has, and when it was sent */
+    char presence[1024];
+    char presence_sent[1024];
+    u64 presence_ns;
+    Grid0Image images[GRID0_IMAGES_MAX];
+} HleGrid0;
+
 #define SSL_CONTEXT_MAX 32 /* ISslContexts: a game keeps one or two (its own, its network library's) */
 #define SSL_CONTEXT_CONNECTIONS 8 /* per context: Switchbrew, from ISslContextForSystem's CreateConnectionEx allowing 10 */
 #define SSL_CONN_MAX (SSL_CONTEXT_MAX * SSL_CONTEXT_CONNECTIONS) /* ISslConnections: as many as the contexts take */
@@ -169,6 +243,14 @@ typedef struct {
     struct stack_st_X509* roots; /* from a bundle file or the Windows store */
     char roots_dir[4096];        /* a hashed directory (or a list), which OpenSSL reads as it needs */
     struct bio_method_st* bio;
+    /* inkypaint: the console's certificate ids each root stands for (GetCertificates), and GRID0+'s CA's place in
+       roots + 1 (0 without it) */
+    struct {
+        i32 id;
+        i32 root; /* its index in roots */
+    } builtin[64];
+    u32 builtin_count;
+    int grid0_root;
     SslContext ctxs[SSL_CONTEXT_MAX];
     SslConn conns[SSL_CONN_MAX];
     u32 ctx_next, conn_next;
