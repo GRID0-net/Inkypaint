@@ -94,3 +94,7 @@ edenprobe-run/
 /.dlcache/
 /dlcache.tar
 .DS_Store
+
+# the launcher's SwiftPM build (scripts/package-launcher.sh puts the app in build/launcher)
+/src/launcher/.build/
+/src/launcher/.swiftpm/

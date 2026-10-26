@@ -8,6 +8,7 @@
 #   ./inkypaint.sh setup      Homebrew packages and Ryujinx's MoltenVK (asks before installing anything)
 #   ./inkypaint.sh build      configure and build the runtime and driver into build/macos
 #   ./inkypaint.sh prepare    extract the base game with the 11.3.0 update, then recompile it
+#   ./inkypaint.sh launcher   build the runtime, then the inkypaint app (SwiftUI, Xcode 26) into build/launcher
 #   ./inkypaint.sh run [secs] [--KEY=VALUE...]  run the game (default: until you close it), screenshot at the end
 #   ./inkypaint.sh perf [secs] [--KEY=VALUE...] a measured run: frame rate, GPU time, memory, threads, call stacks
 #   ./inkypaint.sh diag [secs]  three measured runs that narrow down the rendering bugs (about 6 minutes)
@@ -340,6 +341,7 @@ case "$cmd" in
     texdiag) logged texdiag do_texdiag "$@" ;;
     rtdump) logged rtdump do_rtdump "$@" ;;
     shadowdiag) logged shadowdiag do_shadowdiag "$@" ;;
+    launcher) logged build do_build && logged launcher "$ROOT/scripts/package-launcher.sh" ;;
     capture) logged capture do_capture "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
     *) sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//' ;;
