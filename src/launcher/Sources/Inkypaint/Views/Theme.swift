@@ -54,6 +54,18 @@ enum Splat: String, CaseIterable {
     }()
 }
 
+/// The game's own logo, when the app was built with one: scripts/package-launcher.sh copies local/branding/*.png
+/// into the app, and nothing of the game's goes into git, so a build without it shows the title in type instead.
+enum Branding {
+    static let logo: NSImage? = {
+        for bundle in [Bundle.main] {
+            if let url = bundle.url(forResource: "splatoon3-logo", withExtension: "png") { return NSImage(contentsOf: url) }
+        }
+        if let path = ProcessInfo.processInfo.environment["INKYPAINT_LOGO"] { return NSImage(contentsOfFile: path) }
+        return nil
+    }()
+}
+
 extension Font {
     /// The game's loud display type, as near as the system font gets: black, rounded, slanted.
     static func inkTitle(_ size: CGFloat) -> Font { .system(size: size, weight: .black, design: .rounded).italic() }

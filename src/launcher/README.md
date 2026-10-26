@@ -41,3 +41,7 @@ Game Files shows the data folder. A newer app brings a newer runtime: it is copi
 time you press Play.
 
 The ink splats in `Sources/Inkypaint/Resources` are white masks, tinted where they are drawn.
+
+The Play page shows the game's logo when `local/branding/splatoon3-logo.png` exists at build time (a transparent PNG;
+the script copies it into the app). It is the game's artwork, so it stays in the git-ignored `local/` folder. Without
+it, the page shows the title in type. From Xcode, `INKYPAINT_LOGO` points at the file.

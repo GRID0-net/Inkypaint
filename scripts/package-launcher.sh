@@ -44,6 +44,12 @@ cp "$BIN/Inkypaint" "$C/MacOS/Inkypaint"
 # SwiftPM's resource bundle (Bundle.module looks in Contents/Resources), and the splats where Bundle.main finds them
 for b in "$BIN"/*_Inkypaint.bundle; do [ -d "$b" ] && cp -R "$b" "$C/Resources/"; done
 cp "$LAUNCHER"/Sources/Inkypaint/Resources/*.png "$C/Resources/"
+# the game's logo, when you have put it in local/branding (it is the game's: it stays out of git)
+if ls "$ROOT"/local/branding/*.png > /dev/null 2>&1; then
+    cp "$ROOT"/local/branding/*.png "$C/Resources/"
+else
+    say "no local/branding/splatoon3-logo.png: the Play page shows the title in type"
+fi
 
 build_number="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 sed -e "s/@VERSION@/$VERSION/" -e "s/@BUILD@/$build_number/" "$LAUNCHER/Packaging/Info.plist" > "$C/Info.plist"

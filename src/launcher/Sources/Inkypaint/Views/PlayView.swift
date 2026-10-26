@@ -53,13 +53,25 @@ struct PlayView: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             .glassEffect(.regular, in: .capsule)
 
-            Text(Game.name)
-                .font(.inkTitle(68))
-                .foregroundStyle(.white)
-                .rotationEffect(.degrees(-3), anchor: .leading)
-                .shadow(color: Ink.purple.opacity(0.8), radius: 0, x: 4, y: 4)
-                .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
-                .accessibilityAddTraits(.isHeader)
+            if let logo = Branding.logo {
+                Image(nsImage: logo)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 440)
+                    .shadow(color: .black.opacity(0.45), radius: 22, y: 10)
+                    .padding(.leading, -12) // the splat's edge, not its letters, meets the margin
+                    .accessibilityLabel(Game.name)
+                    .accessibilityAddTraits(.isHeader)
+            } else {
+                Text(Game.name)
+                    .font(.inkTitle(68))
+                    .foregroundStyle(.white)
+                    .rotationEffect(.degrees(-3), anchor: .leading)
+                    .shadow(color: Ink.purple.opacity(0.8), radius: 0, x: 4, y: 4)
+                    .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+                    .accessibilityAddTraits(.isHeader)
+            }
         }
     }
 
