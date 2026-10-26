@@ -5,11 +5,12 @@ import Foundation
 import Observation
 
 enum Pane: String, Hashable, CaseIterable, Identifiable {
-    case play, settings, files
+    case play, online, settings, files
     var id: String { rawValue }
     var title: String {
         switch self {
         case .play: "Play"
+        case .online: "Online"
         case .settings: "Settings"
         case .files: "Game Files"
         }
@@ -17,6 +18,7 @@ enum Pane: String, Hashable, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .play: "gamecontroller.fill"
+        case .online: "person.2.fill"
         case .settings: "slider.horizontal.3"
         case .files: "externaldrive.fill"
         }
@@ -31,6 +33,7 @@ final class AppModel {
     private(set) var paths: GamePaths
     private(set) var settings: GameSettings
     let preparer = Preparer()
+    let online = OnlineModel()
     var sources = GameSources()
 
     private(set) var running: Process?
@@ -54,6 +57,7 @@ final class AppModel {
         paths = p
         settings = GameSettings(url: p.settings)
         hideWhilePlaying = UserDefaults.standard.object(forKey: "hideWhilePlaying") as? Bool ?? true
+        online.settings = settings
         if !p.isPrepared { pane = .files }
     }
 
@@ -65,6 +69,7 @@ final class AppModel {
     func useDataFolder(_ url: URL) {
         paths = GamePaths(data: url)
         settings = GameSettings(url: paths.settings)
+        online.settings = settings
         if url == GamePaths.defaultData {
             UserDefaults.standard.removeObject(forKey: "dataFolder")
         } else {
@@ -75,7 +80,23 @@ final class AppModel {
     func refresh() {
         settings.reload()
         // a preparation that just finished: the game and its settings are there now
-        if case .done = preparer.phase { settings = GameSettings(url: paths.settings) }
+        if case .done = preparer.phase {
+            settings = GameSettings(url: paths.settings)
+            online.settings = settings
+        }
+    }
+
+    /// The preparation's phase changed: one that just finished compiled in the patches there were
+    func preparationChanged() {
+        refresh()
+        if case .done = preparer.phase, Grid0Patches.compiledIn(paths) { online.patches.recompiled() }
+    }
+
+    /// Recompiles the game, for the GRID0+ patches: the extraction is kept, so it is the recompile alone
+    func recompile() {
+        pane = .files
+        preparer.reset()
+        prepare()
     }
 
     func prepare() { preparer.start(sources: sources, paths: paths) }
@@ -92,10 +113,15 @@ final class AppModel {
             FileManager.default.createFile(atPath: log.path, contents: nil)
             let out = try FileHandle(forWritingTo: log)
 
+            // online, the game signs in to GRID0+ itself: the password goes on its stdin, never on its command line
+            // or in a file
+            let password = online.passwordForGame()
+            let input = Pipe()
             let p = Process()
             p.executableURL = paths.executable
             p.currentDirectoryURL = paths.gameDir
-            p.environment = Bundled.environment()
+            p.environment = Bundled.environment(extra: password == nil ? [:] : ["INKYPAINT_GRID0_STDIN": "1"])
+            p.standardInput = input
             p.standardOutput = out
             p.standardError = out
             p.terminationHandler = { [weak self] proc in
@@ -104,6 +130,8 @@ final class AppModel {
                 Task { @MainActor in self?.ended(status: status, reason: reason, log: log) }
             }
             try p.run()
+            if let password { input.fileHandleForWriting.write(Data((password + "\n").utf8)) }
+            try? input.fileHandleForWriting.close()
             running = p
             playStarted = Date()
             lastPlayed = Date()

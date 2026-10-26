@@ -118,6 +118,18 @@ final class GameSettings {
         }
     }
 
+    /// A key the catalog doesn't show (the online settings), in section when the file doesn't have it yet
+    func setRaw(_ key: String, _ value: String, section: String) {
+        guard file.value(key) != value else { return }
+        file.set(key, value, section: section)
+        do {
+            try file.save(to: url)
+            error = nil
+        } catch {
+            self.error = "Couldn't save the settings: \(error.localizedDescription)"
+        }
+    }
+
     func toggle(_ def: SettingDef) -> Bool { value(def) != "0" }
 
     func resetAll() {

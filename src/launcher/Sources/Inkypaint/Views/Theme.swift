@@ -38,18 +38,13 @@ enum Splat: String, CaseIterable {
         return out
     }()
 
-    /// Where the splats are: the app's Resources (scripts/package-launcher.sh copies them there), or SwiftPM's resource
-    /// bundle beside the executable when run from Xcode or `swift run`. Not Bundle.module: it stops the app when its
-    /// bundle isn't where the build left it, as in the packaged app
+    /// Where the splats are: the app's Resources (scripts/package-launcher.sh copies them there from dist/launcher), or
+    /// for a run from Xcode or `swift run`, dist/launcher in the checkout this file is in
     private static let bundles: [Bundle] = {
         var found = [Bundle.main]
-        let places = [Bundle.main.resourceURL, Bundle.main.executableURL?.deletingLastPathComponent()].compactMap { $0 }
-        for place in places {
-            let items = (try? FileManager.default.contentsOfDirectory(at: place, includingPropertiesForKeys: nil)) ?? []
-            for item in items where item.lastPathComponent.hasSuffix("_Inkypaint.bundle") {
-                if let bundle = Bundle(url: item) { found.append(bundle) }
-            }
-        }
+        let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent() // Views
+            .appendingPathComponent("../../../../../dist/launcher").standardizedFileURL
+        if let dev = Bundle(path: checkout.path) { found.append(dev) }
         return found
     }()
 }

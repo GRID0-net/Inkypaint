@@ -20,11 +20,12 @@ struct RootView: View {
         } detail: {
             switch model.pane {
             case .play: PlayView()
+            case .online: OnlineView()
             case .settings: SettingsView()
             case .files: FilesView()
             }
         }
-        .onChange(of: model.preparer.phase) { model.refresh() }
+        .onChange(of: model.preparer.phase) { model.preparationChanged() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refresh()
         }
@@ -34,6 +35,7 @@ struct RootView: View {
         if pane == .files, model.preparer.isRunning {
             return Text(model.preparer.fraction, format: .percent.precision(.fractionLength(0)))
         }
+        if pane == .online, !model.online.incoming.isEmpty { return Text("\(model.online.incoming.count)") }
         return nil
     }
 }

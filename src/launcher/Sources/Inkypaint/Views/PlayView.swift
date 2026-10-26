@@ -155,6 +155,7 @@ struct PlayView: View {
                 Tile(title: "Shaders", value: model.settings.toggle(
                     SettingsCatalog.all.first { $0.key == "async_pipelines" }!) ? "In the background" : "Waited for",
                      symbol: "sparkles")
+                Tile(title: "Online", value: model.online.playsOnline ? "GRID0+" : "Offline", symbol: "globe")
             }
         }
     }

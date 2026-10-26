@@ -41,9 +41,8 @@ rm -rf "$APP"
 C="$APP/Contents"
 mkdir -p "$C/MacOS" "$C/Resources" "$C/Frameworks"
 cp "$BIN/Inkypaint" "$C/MacOS/Inkypaint"
-# SwiftPM's resource bundle (Bundle.module looks in Contents/Resources), and the splats where Bundle.main finds them
-for b in "$BIN"/*_Inkypaint.bundle; do [ -d "$b" ] && cp -R "$b" "$C/Resources/"; done
-cp "$LAUNCHER"/Sources/Inkypaint/Resources/*.png "$C/Resources/"
+# the ink splats, where Bundle.main finds them (dist/launcher: the repository keeps its binaries in dist/)
+cp "$ROOT"/dist/launcher/splat-*.png "$C/Resources/"
 # the game's logo, when you have put it in local/branding (it is the game's: it stays out of git)
 if ls "$ROOT"/local/branding/*.png > /dev/null 2>&1; then
     cp "$ROOT"/local/branding/*.png "$C/Resources/"
@@ -59,8 +58,8 @@ say "making the icon"
 iconset="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "$iconset"
 for s in 16 32 128 256 512; do
-    sips -z $s $s "$LAUNCHER/Packaging/AppIcon-1024.png" --out "$iconset/icon_${s}x${s}.png" > /dev/null
-    sips -z $((s * 2)) $((s * 2)) "$LAUNCHER/Packaging/AppIcon-1024.png" --out "$iconset/icon_${s}x${s}@2x.png" > /dev/null
+    sips -z $s $s "$ROOT/dist/launcher/AppIcon-1024.png" --out "$iconset/icon_${s}x${s}.png" > /dev/null
+    sips -z $((s * 2)) $((s * 2)) "$ROOT/dist/launcher/AppIcon-1024.png" --out "$iconset/icon_${s}x${s}@2x.png" > /dev/null
 done
 iconutil -c icns "$iconset" -o "$C/Resources/AppIcon.icns"
 
