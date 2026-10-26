@@ -19,14 +19,39 @@ enum Splat: String, CaseIterable {
     case streak = "splat-streak"
 
     var image: Image {
-        let bundles = [Bundle.main, Bundle.module]
-        for bundle in bundles {
-            if let url = bundle.url(forResource: rawValue, withExtension: "png"), let ns = NSImage(contentsOf: url) {
-                return Image(nsImage: ns).renderingMode(.template)
+        guard let ns = Self.loaded[self] else { return Image(systemName: "drop.fill") }
+        return Image(nsImage: ns).renderingMode(.template)
+    }
+
+    /// Each splat read once
+    private static let loaded: [Splat: NSImage] = {
+        var out: [Splat: NSImage] = [:]
+        for splat in Splat.allCases {
+            for bundle in bundles {
+                if let url = bundle.url(forResource: splat.rawValue, withExtension: "png"),
+                   let image = NSImage(contentsOf: url) {
+                    out[splat] = image
+                    break
+                }
             }
         }
-        return Image(systemName: "drop.fill")
-    }
+        return out
+    }()
+
+    /// Where the splats are: the app's Resources (scripts/package-launcher.sh copies them there), or SwiftPM's resource
+    /// bundle beside the executable when run from Xcode or `swift run`. Not Bundle.module: it stops the app when its
+    /// bundle isn't where the build left it, as in the packaged app
+    private static let bundles: [Bundle] = {
+        var found = [Bundle.main]
+        let places = [Bundle.main.resourceURL, Bundle.main.executableURL?.deletingLastPathComponent()].compactMap { $0 }
+        for place in places {
+            let items = (try? FileManager.default.contentsOfDirectory(at: place, includingPropertiesForKeys: nil)) ?? []
+            for item in items where item.lastPathComponent.hasSuffix("_Inkypaint.bundle") {
+                if let bundle = Bundle(url: item) { found.append(bundle) }
+            }
+        }
+        return found
+    }()
 }
 
 extension Font {

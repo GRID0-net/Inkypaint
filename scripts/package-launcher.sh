@@ -42,7 +42,7 @@ C="$APP/Contents"
 mkdir -p "$C/MacOS" "$C/Resources" "$C/Frameworks"
 cp "$BIN/Inkypaint" "$C/MacOS/Inkypaint"
 # SwiftPM's resource bundle (Bundle.module looks in Contents/Resources), and the splats where Bundle.main finds them
-[ -d "$BIN/Inkypaint_Inkypaint.bundle" ] && cp -R "$BIN/Inkypaint_Inkypaint.bundle" "$C/Resources/"
+for b in "$BIN"/*_Inkypaint.bundle; do [ -d "$b" ] && cp -R "$b" "$C/Resources/"; done
 cp "$LAUNCHER"/Sources/Inkypaint/Resources/*.png "$C/Resources/"
 
 build_number="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
