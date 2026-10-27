@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 the inkypaint contributors
+#include <winver.h>
+1 ICON "../../dist/launcher/inkypaint.ico"
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "inkypaint"
+            VALUE "ProductName", "inkypaint"
+            VALUE "LegalCopyright", "GPL-3.0-or-later, the inkypaint contributors"
+            VALUE "OriginalFilename", "inkypaint.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

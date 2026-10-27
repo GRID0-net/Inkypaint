@@ -3,6 +3,8 @@
 import Foundation
 import Network
 import Security
+import Darwin
+import LocalAuthentication
 
 /// GRID0+, the community's replacement for the console's servers. The launcher signs in there and manages the
 /// account's friends; the game does the same through the runtime (src/nx/hle/services/network/grid0.c), with the
@@ -371,34 +373,74 @@ actor Grid0Session {
     }
 }
 
-/// The password, in the login Keychain under the user name
-enum Grid0Keychain {
-    private static let service = "io.github.inkypaint.grid0"
-
-    private static func query(_ account: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
-    }
+/// Owner-only local credentials: ad-hoc launcher rebuilds must never request login-Keychain authentication.
+enum Grid0Credentials {
+    private static let migrated = "grid0LocalCredentialsEnabled"
+    private static var directory: URL { GamePaths.appSupport.appendingPathComponent("Credentials", isDirectory: true) }
+    private static var file: URL { directory.appendingPathComponent("grid0.json") }
 
     static func save(_ password: String, account: String) throws {
-        SecItemDelete(query(account) as CFDictionary)
-        var item = query(account)
-        item[kSecValueData as String] = Data(password.utf8)
-        item[kSecAttrLabel as String] = "inkypaint GRID0+ password"
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw Grid0Error.refused("Couldn't keep the password in the Keychain (\(status)).")
+        let fm = FileManager.default
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var st = stat()
+        guard lstat(directory.path, &st) == 0, st.st_uid == getuid(),
+              st.st_mode & S_IFMT == S_IFDIR, chmod(directory.path, 0o700) == 0 else {
+            throw Grid0Error.refused("Couldn't secure the local credentials directory.")
         }
+        let data = try JSONSerialization.data(withJSONObject: ["account": account, "password": password])
+        let temporary = directory.appendingPathComponent(UUID().uuidString)
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw Grid0Error.refused("Couldn't create the local credentials file.") }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+            guard rename(temporary.path, file.path) == 0 else {
+                throw Grid0Error.refused("Couldn't replace the local credentials file.")
+            }
+        } catch {
+            try? handle.close()
+            try? fm.removeItem(at: temporary)
+            throw error
+        }
+        UserDefaults.standard.set(true, forKey: migrated)
+    }
+
+    private static func loadFile(account: String) -> String? {
+        let fd = open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_uid == getuid(), st.st_mode & S_IFMT == S_IFREG,
+              st.st_mode & 0o077 == 0, st.st_size > 0, st.st_size <= 65536,
+              let data = try? handle.readToEnd(),
+              let item = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+              item["account"] == account else { return nil }
+        return item["password"]
     }
 
     static func load(account: String) -> String? {
-        var q = query(account)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        if let password = loadFile(account: account) { return password }
+        guard !UserDefaults.standard.bool(forKey: migrated) else { return nil }
+        // One migration attempt, explicitly forbidding any Keychain authentication UI.
+        UserDefaults.standard.set(true, forKey: migrated)
+        let authentication = LAContext()
+        authentication.interactionNotAllowed = true
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "io.github.inkypaint.grid0", kSecAttrAccount as String: account,
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: authentication]
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data, let password = String(data: data, encoding: .utf8),
+              (try? save(password, account: account)) != nil else { return nil }
+        return password
     }
 
-    static func delete(account: String) { SecItemDelete(query(account) as CFDictionary) }
+    static func delete(account: String) {
+        if loadFile(account: account) != nil { try? FileManager.default.removeItem(at: file) }
+        UserDefaults.standard.set(true, forKey: migrated)
+    }
 }

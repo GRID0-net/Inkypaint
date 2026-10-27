@@ -5,13 +5,14 @@ import Foundation
 import Observation
 
 enum Pane: String, Hashable, CaseIterable, Identifiable {
-    case play, online, settings, files
+    case play, online, settings, mods, files
     var id: String { rawValue }
     var title: String {
         switch self {
         case .play: "Play"
         case .online: "Online"
         case .settings: "Settings"
+        case .mods: "Mods"
         case .files: "Game Files"
         }
     }
@@ -20,6 +21,7 @@ enum Pane: String, Hashable, CaseIterable, Identifiable {
         case .play: "gamecontroller.fill"
         case .online: "person.2.fill"
         case .settings: "slider.horizontal.3"
+        case .mods: "puzzlepiece.extension.fill"
         case .files: "externaldrive.fill"
         }
     }
@@ -34,6 +36,7 @@ final class AppModel {
     private(set) var settings: GameSettings
     let preparer = Preparer()
     let online = OnlineModel()
+    let mods = ModsModel()
     var sources = GameSources()
 
     private(set) var running: Process?
@@ -77,6 +80,8 @@ final class AppModel {
         }
     }
 
+    func refreshMods() { mods.refresh(paths, settings) }
+
     func refresh() {
         settings.reload()
         // a preparation that just finished: the game and its settings are there now
@@ -84,12 +89,17 @@ final class AppModel {
             settings = GameSettings(url: paths.settings)
             online.settings = settings
         }
+        refreshMods()
     }
 
     /// The preparation's phase changed: one that just finished compiled in the patches there were
     func preparationChanged() {
         refresh()
-        if case .done = preparer.phase, Grid0Patches.compiledIn(paths) { online.patches.recompiled() }
+        guard case .done = preparer.phase else { return }
+        if Grid0Patches.compiledIn(paths) { online.patches.recompiled() }
+        // online play on in the game's settings, which the preparation has just made
+        if setupOnline, online.isSignedIn { online.setPlaysOnline(true) }
+        setupOnline = false
     }
 
     /// Recompiles the game, for the GRID0+ patches: the extraction is kept, so it is the recompile alone
@@ -100,6 +110,48 @@ final class AppModel {
     }
 
     func prepare() { preparer.start(sources: sources, paths: paths) }
+
+    // MARK: online play before the preparation
+
+    /// GRID0+'s patches are compiled into the game, so they come before its preparation: a game prepared first and
+    /// signed in to afterwards had to be recompiled again for them
+    enum SetupStep: Equatable {
+        case idle
+        case askingOnline       // no account: sign in, or prepare without online play
+        case downloadingPatches // signed in: the patches first, then the preparation
+    }
+    private(set) var setupStep: SetupStep = .idle
+    private var setupOnline = false // the preparation under way is for online play
+
+    /// The Prepare button: signed in, the patches and then the preparation; otherwise the question first
+    func requestPrepare() {
+        guard setupStep == .idle, !preparer.isRunning else { return }
+        if online.isSignedIn {
+            Task { await prepareWithPatches() }
+        } else {
+            setupStep = .askingOnline
+        }
+    }
+    /// The question's answers
+    func prepareOffline() {
+        guard setupStep == .askingOnline else { return }
+        setupStep = .idle
+        setupOnline = false
+        prepare()
+    }
+    func cancelSetup() {
+        if setupStep == .askingOnline { setupStep = .idle }
+    }
+    /// The newest patches into the game's mods folder, then the preparation, which compiles them in. A download that
+    /// fails leaves them to the Online page: the game is prepared all the same, and plays offline until then
+    func prepareWithPatches() async {
+        guard setupStep != .downloadingPatches, !preparer.isRunning, online.isSignedIn else { return }
+        setupStep = .downloadingPatches
+        setupOnline = true
+        await online.patches.update(paths)
+        setupStep = .idle
+        prepare()
+    }
 
     // MARK: playing
 
@@ -114,7 +166,7 @@ final class AppModel {
             let out = try FileHandle(forWritingTo: log)
 
             // online, the game signs in to GRID0+ itself: the password goes on its stdin, never on its command line
-            // or in a file
+            // or in the game's settings; the launcher's owner-only credential store keeps it between launches
             let password = online.passwordForGame()
             let input = Pipe()
             let p = Process()

@@ -109,7 +109,8 @@ private struct Banner: View {
 
 // MARK: - signing in
 
-private struct SignInCard: View {
+/// GRID0+'s sign-in, on the Online page and in the question before a preparation (FilesView's OnlineFirstSheet)
+struct SignInCard: View {
     @Environment(AppModel.self) private var model
     @State private var username = ""
     @State private var password = ""
@@ -147,7 +148,7 @@ private struct SignInCard: View {
 
                 HStack {
                     Text("No account yet? Use /register with the GRID0+ bot on the GRID0 Discord server. Your password "
-                         + "stays in your Keychain.")
+                         + "stays on this Mac.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

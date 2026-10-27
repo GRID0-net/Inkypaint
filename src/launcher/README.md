@@ -50,8 +50,9 @@ from the checkout.
 ## Online play
 
 The launcher talks to GRID0+ with the Mac's own TLS (Network.framework). It trusts the server only when its
-certificate chains to the SwitchNet Local CA and names the host it answers for. Your password stays in the login
-Keychain. When **Play online** is on, the launcher sets `network=1`, `grid0=1`, `grid0_server` and `grid0_user` in
+certificate chains to the SwitchNet Local CA and names the host it answers for. Your password stays in `~/Library/Application Support/inkypaint/Credentials/grid0.json`, with mode 0600
+inside an owner-only directory. Rebuilds do not request login-Keychain authentication. An old Keychain entry is
+migrated only if macOS permits reading it without a prompt; otherwise sign in to GRID0+ once. When **Play online** is on, the launcher sets `network=1`, `grid0=1`, `grid0_server` and `grid0_user` in
 the game's settings, and hands the game the password on its standard input when it starts. The game then signs in
 itself (`src/nx/hle/services/network/grid0.c`). The game's own TLS finds the Mac's trusted roots and the SwitchNet CA
 where a console has its firmware's, so no firmware is needed.

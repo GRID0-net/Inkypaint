@@ -9,6 +9,7 @@ struct SettingDef: Identifiable {
     enum Kind {
         case toggle
         case choice([(value: String, label: String)])
+        case networkAdapter // a choice of the Mac's adapters, listed when the settings show
     }
     let key: String
     let section: String
@@ -60,6 +61,10 @@ enum SettingsCatalog {
                        kind: .choice([("game", "As the game asks (60)"), ("30", "30 FPS"), ("120", "120 FPS"),
                                       ("0", "Unlimited")]),
                        defaultValue: "game"),
+            SettingDef(key: "smooth_motion", section: "Performance", title: "Smooth motion (experimental)",
+                       detail: "Draws up to 120 frames a second while the game itself keeps its 60, the camera "
+                           + "moving smoothly in between. Only shows when your Mac has GPU time to spare.",
+                       kind: .toggle, defaultValue: "0", nextLaunch: true),
             SettingDef(key: "vsync", section: "Graphics", title: "VSync", detail: "Waits for the display: no tearing.",
                        kind: .toggle, defaultValue: "1"),
             SettingDef(key: "anisotropy", section: "Graphics", title: "Texture filtering",
@@ -68,6 +73,21 @@ enum SettingsCatalog {
                        defaultValue: "0", nextLaunch: true),
             SettingDef(key: "shadows", section: "Graphics", title: "Shadows", detail: "", kind: .toggle,
                        defaultValue: "1"),
+        ]),
+        SettingGroup(title: "Controls", symbol: "gamecontroller", settings: [
+            SettingDef(key: "gamepad_rumble", section: "Controllers", title: "Rumble",
+                       detail: "How strongly your controller vibrates when the game asks. Off turns it off.",
+                       kind: .choice([("0", "Off"), ("40", "Light"), ("70", "Medium"), ("100", "Full")]),
+                       defaultValue: "100"),
+        ]),
+        SettingGroup(title: "LAN play", symbol: "network", settings: [
+            SettingDef(key: "network", section: "Network", title: "Network",
+                       detail: "Lets the game use your connection. LAN play and online play need it.",
+                       kind: .toggle, defaultValue: "0"),
+            SettingDef(key: "lan_adapter", section: "Network", title: "LAN adapter",
+                       detail: "Where the game looks for LAN and local-play lobbies. Pick ZeroTier's adapter to play "
+                           + "with friends on your ZeroTier network as if you were on one LAN.",
+                       kind: .networkAdapter, defaultValue: ""),
         ]),
         SettingGroup(title: "Shaders", symbol: "sparkles", settings: [
             SettingDef(key: "async_pipelines", section: "Performance", title: "Compile shaders in the background",
@@ -143,6 +163,7 @@ final class GameSettings {
         switch def.kind {
         case .toggle: return v == "0" ? "Off" : "On"
         case .choice(let options): return options.first { $0.value == v }?.label ?? v
+        case .networkAdapter: return NetworkAdapter.choices().first { $0.value == v }?.label ?? v
         }
     }
 }

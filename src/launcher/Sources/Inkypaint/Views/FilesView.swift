@@ -26,6 +26,9 @@ struct FilesView: View {
         }
         .background { SetupBackdrop() }
         .navigationTitle("Game Files")
+        .sheet(isPresented: Binding(get: { model.setupStep == .askingOnline }, set: { if !$0 { model.cancelSetup() } })) {
+            OnlineFirstSheet()
+        }
     }
 
     private var hero: some View {
@@ -121,7 +124,7 @@ private struct SetupSteps: View {
 
             HStack(spacing: 12) {
                 Button {
-                    model.prepare()
+                    model.requestPrepare()
                 } label: {
                     Label("Prepare Splatoon 3", systemImage: "wand.and.stars")
                         .font(.title3.weight(.bold))
@@ -130,12 +133,18 @@ private struct SetupSteps: View {
                 .buttonStyle(.glassProminent)
                 .tint(Ink.purple)
                 .controlSize(.extraLarge)
-                .disabled(!model.sources.isComplete && !model.paths.isExtracted)
+                .disabled((!model.sources.isComplete && !model.paths.isExtracted) || model.setupStep != .idle)
 
                 Button("Find in a Folder…") { ask(.scanFolder) }
                     .buttonStyle(.glass)
                     .controlSize(.large)
                 Spacer()
+            }
+            if model.setupStep == .downloadingPatches {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading GRID0+'s patches, so the game is prepared with them…").font(.callout)
+                }
             }
             Text("About 30 minutes on an M2, and 13 GB of disk. The Mac stays usable meanwhile.")
                 .font(.caption)
@@ -354,7 +363,11 @@ private struct ReadyCard: View {
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Button("Recompile…") { confirmRecompile = true }.buttonStyle(.glass)
-                            .disabled(!model.paths.isExtracted)
+                            .disabled(!model.paths.isExtracted || model.setupStep != .idle)
+                        if model.setupStep == .downloadingPatches {
+                            ProgressView().controlSize(.small)
+                            Text("Downloading GRID0+'s patches…").font(.callout).foregroundStyle(.secondary)
+                        }
                         Button("Use Another Data Folder…") { choosingData = true }.buttonStyle(.glass)
                     }
                 }
@@ -364,9 +377,41 @@ private struct ReadyCard: View {
             if case .success(let url) = result { model.useDataFolder(url) }
         }
         .confirmationDialog("Recompile Splatoon 3?", isPresented: $confirmRecompile) {
-            Button("Recompile") { model.prepare() }
+            Button("Recompile") { model.requestPrepare() }
         } message: {
             Text("The game can't be played until it finishes.")
+        }
+    }
+}
+
+/// Before a preparation with no GRID0+ account: online play's patches are compiled into the game, so signing in now
+/// puts them in this preparation, where signing in afterwards meant preparing the game a second time
+private struct OnlineFirstSheet: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Play online?").font(.title2.weight(.bold))
+            Text("Online play goes through GRID0+, which patches the game. Sign in now and the patches go into this "
+                 + "preparation. Signing in later means preparing the game a second time.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SignInCard()
+            if let error = model.online.error {
+                Text(error).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { model.cancelSetup() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Set Up Without Online") { model.prepareOffline() }
+                    .buttonStyle(.glass)
+            }
+        }
+        .padding(24)
+        .frame(width: 540)
+        .onChange(of: model.online.isSignedIn) { _, signedIn in
+            if signedIn { Task { await model.prepareWithPatches() } }
         }
     }
 }

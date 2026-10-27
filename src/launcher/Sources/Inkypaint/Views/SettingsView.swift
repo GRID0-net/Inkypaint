@@ -90,16 +90,24 @@ struct SettingsView: View {
                 title(def)
             }
             .tint(Ink.purple)
+        case .networkAdapter:
+            choice(def, settings, NetworkAdapter.choices())
         case .choice(let options):
-            Picker(selection: Binding(get: { settings.value(def) }, set: { settings.set(def, $0) })) {
-                ForEach(options.indices, id: \.self) { i in Text(options[i].label).tag(options[i].value) }
-                // a value set in the file by hand stays selectable
-                if !options.contains(where: { $0.value == settings.value(def) }) {
-                    Text(settings.value(def)).tag(settings.value(def))
-                }
-            } label: {
-                title(def)
+            choice(def, settings, options)
+        }
+    }
+
+    @ViewBuilder
+    private func choice(_ def: SettingDef, _ settings: GameSettings,
+                        _ options: [(value: String, label: String)]) -> some View {
+        Picker(selection: Binding(get: { settings.value(def) }, set: { settings.set(def, $0) })) {
+            ForEach(options.indices, id: \.self) { i in Text(options[i].label).tag(options[i].value) }
+            // a value set in the file by hand (or an adapter not connected now) stays selectable
+            if !options.contains(where: { $0.value == settings.value(def) }) {
+                Text(settings.value(def)).tag(settings.value(def))
             }
+        } label: {
+            title(def)
         }
     }
 

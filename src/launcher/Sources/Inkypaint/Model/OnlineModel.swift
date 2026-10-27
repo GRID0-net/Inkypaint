@@ -3,7 +3,7 @@
 import Foundation
 import Observation
 
-/// Online play on GRID0+: the account (its user name in the launcher's defaults, its password in the Keychain), its
+/// Online play on GRID0+: the account (its user name in the launcher's defaults, its password in an owner-only local file), its
 /// friends and requests, and the game's settings that turn it on ([Network] in the game's .ini: network, grid0,
 /// grid0_server, grid0_user). The game signs in itself, with the password the launcher hands it at start.
 @Observable
@@ -35,7 +35,7 @@ final class OnlineModel {
     init() {
         username = UserDefaults.standard.string(forKey: "grid0User") ?? ""
         server = UserDefaults.standard.string(forKey: "grid0Server") ?? Grid0.defaultServer
-        if !username.isEmpty, let password = Grid0Keychain.load(account: username) {
+        if !username.isEmpty, let password = Grid0Credentials.load(account: username) {
             session = Grid0Session(server: server, username: username, password: password)
             account = .signedIn
         }
@@ -62,7 +62,7 @@ final class OnlineModel {
     /// The password the game signs in with, when it plays online
     func passwordForGame() -> String? {
         guard playsOnline else { return nil }
-        return Grid0Keychain.load(account: username)
+        return Grid0Credentials.load(account: username)
     }
 
     // MARK: the account
@@ -81,8 +81,8 @@ final class OnlineModel {
         do {
             try await candidate.signIn()
             let me = try await candidate.me()
-            try Grid0Keychain.save(password, account: username)
-            if self.username != username, !self.username.isEmpty { Grid0Keychain.delete(account: self.username) }
+            try Grid0Credentials.save(password, account: username)
+            if self.username != username, !self.username.isEmpty { Grid0Credentials.delete(account: self.username) }
             self.username = username
             self.server = server
             UserDefaults.standard.set(username, forKey: "grid0User")
@@ -100,7 +100,7 @@ final class OnlineModel {
 
     func signOut() {
         setPlaysOnline(false)
-        Grid0Keychain.delete(account: username)
+        Grid0Credentials.delete(account: username)
         session = nil
         me = nil
         friends = []

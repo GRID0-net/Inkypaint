@@ -22,6 +22,7 @@ struct RootView: View {
             case .play: PlayView()
             case .online: OnlineView()
             case .settings: SettingsView()
+            case .mods: ModsView()
             case .files: FilesView()
             }
         }

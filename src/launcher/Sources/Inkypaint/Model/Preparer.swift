@@ -63,11 +63,12 @@ final class Preparer {
     /// The whole job: extraction is the first quarter, the recompile the rest (on an M2 it takes about 30 minutes).
     var fraction: Double { 0.25 * extractFraction + 0.75 * compileFraction }
 
-    /// Parallel compiles: two on an 8 GB Mac, which otherwise swaps; more with more memory.
+    /// Parallel compiles: two on an 8 GB Mac, which otherwise swaps; with more memory, one for each 2 GB past 4 GB,
+    /// up to one for each core (giant functions are compiled at O1, which used to take the most memory).
     static var jobs: Int {
         let gb = Int(ProcessInfo.processInfo.physicalMemory >> 30)
         if gb <= 8 { return 2 }
-        return max(2, min(ProcessInfo.processInfo.activeProcessorCount / 2, gb / 4))
+        return max(2, min(ProcessInfo.processInfo.activeProcessorCount, (gb - 4) / 2))
     }
 
     func start(sources: GameSources, paths: GamePaths) {
