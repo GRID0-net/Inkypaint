@@ -8,13 +8,18 @@ name: Release
 #   macOS arm64     the app (macOS 26, Apple silicon), zipped, built by ./inkypaint.sh launcher
 # A version tag (v1.2.3, or v1.2.3-beta.1 for a prerelease) pushed builds them all and publishes them as that tag's
 # GitHub release, with .github/release-notes.md as its notes and SHA256SUMS beside the files. Run by hand (Actions >
-# Release > Run workflow), it builds them and keeps them as the run's artifacts, without a release.
+# Release > Run workflow), it also publishes: use the optional tag, or dev-<commit> for a prerelease.
 #
 # Nothing of the game is in any of them: players set it up from their own copy in the launcher.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (optional; empty publishes a dev-<commit> prerelease)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -24,8 +29,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # the version the packages are named after: the tag (v1.2.3), else dev- and the commit
-  VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('dev-{0}', github.sha) }}
+  # One name for all packages and the release, including manual runs on a branch.
+  VERSION: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || format('dev-{0}', github.sha) }}
 
 jobs:
   checks:
@@ -34,6 +39,21 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check release tag
+        shell: bash
+        run: |
+          case "$VERSION" in
+            ""|[-.]*|*[!A-Za-z0-9._-]*) echo "Invalid release tag: $VERSION" >&2; exit 1 ;;
+          esac
+          git check-ref-format "refs/tags/$VERSION"
+          if commit=$(git rev-parse --verify --quiet "refs/tags/$VERSION^{commit}"); then
+            if [ "$commit" != "$GITHUB_SHA" ]; then
+              echo "Tag $VERSION points to another commit. Select that tag to rebuild it, or choose a new tag." >&2
+              exit 1
+            fi
+          fi
       - name: Tracked material (keys, dumps, the game's files)
         run: |
           python3 tests/tracked_material.py --self-test
@@ -187,7 +207,6 @@ jobs:
   release:
     name: Publish the release
     needs: [linux, windows, macos]
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -206,7 +225,7 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.VERSION }}
         run: |
           prerelease=
           case "$TAG" in *-*) prerelease=--prerelease ;; esac
@@ -214,5 +233,5 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" release/* --clobber
           else
-            gh release create "$TAG" release/* --title "inkypaint $TAG" --notes-file /tmp/notes.md --verify-tag $prerelease
+            gh release create "$TAG" release/* --title "inkypaint $TAG" --notes-file /tmp/notes.md --target "$GITHUB_SHA" $prerelease
           fi

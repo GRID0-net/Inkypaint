@@ -94,6 +94,13 @@ for m in QtQuick QtQml QtCore QtNetwork; do
     [ -d "$qt/qml/$m" ] && cp -R "$qt/qml/$m" "$out/qml/"
 done
 find "$out" \( -name '*.debug' -o -name '*.pdb' -o -name '*.a' \) -delete
+# Qt Quick's fallback file/folder pickers import this module. Native dialogs
+# aren't available on every desktop, so it must ship even if build-time scans
+# only see our direct QtQuick.Dialogs import.
+foldermodel="$qt/qml/Qt/labs/folderlistmodel"
+[ -d "$foldermodel" ] || die "Qt's fallback file picker needs $foldermodel"
+mkdir -p "$out/qml/Qt/labs"
+cp -R "$foldermodel" "$out/qml/Qt/labs/"
 printf '[Paths]\nPrefix = .\nPlugins = plugins\nQmlImports = qml\n' > "$out/qt.conf"
 # every DLL any shipped program, plugin or QML module imports, from MSYS2's bin, until none is missing: beside the
 # launcher for its files, in runtime/ for the runtime's. Windows' own (the api-ms-win sets, kernel32...) aren't in it

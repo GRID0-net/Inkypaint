@@ -253,6 +253,12 @@ bool Grid0Credentials::save(const QString& account, const QString& password, QSt
     return true;
 }
 
+QString Grid0Credentials::savedAccount() {
+    QFile f(credentialsFile());
+    if (f.size() > 65536 || !f.open(QIODevice::ReadOnly)) return QString();
+    return QJsonDocument::fromJson(f.readAll()).object().value("account").toString();
+}
+
 QString Grid0Credentials::load(const QString& account) {
     QFile f(credentialsFile());
     if (f.size() > 65536 || !f.open(QIODevice::ReadOnly)) return QString();

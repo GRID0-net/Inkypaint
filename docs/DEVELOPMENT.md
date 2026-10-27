@@ -34,7 +34,9 @@ FS tests use production tree/HLE + synthetic temp data; `--only tree|service` se
 
 the current workflows live in `.github/workflows/`. `checks.yml` runs the repository checks, and `release.yml`
 builds the macOS, Windows and Linux packages. version tags trigger publishing, so don't push a release tag just
-to test a build. running the Release workflow manually keeps the builds as artifacts.
+to test a build. running the Release workflow manually also publishes a release once every platform passes.
+give it a release tag, or leave the tag empty for a `dev-<commit>` prerelease. packages are kept as Actions
+artifacts too.
 
 for runtime changes, test the affected scene and write down the result. intermittent bugs need repeated runs.
 synthetic tests are useful for CPU behavior and malformed IPC, but don't prove a match works!

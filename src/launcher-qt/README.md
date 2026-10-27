@@ -65,3 +65,25 @@ The launcher talks to GRID0+ over TLS with Qt's OpenSSL backend. It trusts the s
 chains to the SwitchNet Local CA and names the host it answers for. The game reads the password from its standard
 input when it starts, so the password never appears on its command line or in its settings. The game's own TLS finds
 Windows' trusted root certificates (`CertOpenSystemStore`) and the SwitchNet CA where a console has its firmware's.
+
+## Launcher settings and file pickers
+
+launcher preferences use Qt's `GRID0` / `inkypaint` identity. that gives Windows a valid registry store for the
+chosen game folder, GRID0+ account name and other preferences. Linux uses its normal Qt config location.
+settings from the old identity are imported once where available. credentials still live in the separate file
+listed above, with DPAPI on Windows. if an older Windows build lost the saved account name, the launcher recovers
+it from that file and checks the credential before restoring sign-in.
+
+a custom data folder that the old build never saved needs to be selected once again. choose the existing folder,
+you don't need to prepare or recompile the game again!
+
+both packages include `Qt/labs/folderlistmodel`, which Qt's fallback file and folder pickers need. keep it in the
+package even on systems where native dialogs work.
+
+for launcher regression tests, configure this Qt project with `BUILD_TESTING=ON`, build `inkypaint-test-state`,
+then run `ctest --test-dir <launcher-build> --output-on-failure`. it checks persistence across separate processes
+with a temporary settings store and a synthetic prepared-game folder. it doesn't use a real account or game.
+
+`inkypaint-test-dialogs` takes `tests/launcher_qt_dialogs.qml` and a staged package's QML directory as absolute
+arguments. with `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software`, it checks that fallback file and folder
+pickers open using only the packaged QML modules. missing `Qt.labs.folderlistmodel` must fail that test.

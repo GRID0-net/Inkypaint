@@ -597,7 +597,11 @@ static int reg_flushed_at(const DirectCtx* c, const u64* insn, const u8* block_s
     if (!block_start || !block_start[i])
         for (u32 j = i; j-- > 11;) {
             if (!IDX_OK(j)) continue;
-            if (may_write(insn[j], r)) return ftz_writer(insn[j]) && B(insn[j], 16, 3) == 7 && !B(insn[j], 19, 1);
+            /* may_write deliberately includes neighboring destinations and the
+               texture destination field. That can invalidate knowledge, but
+               only an actual scalar destination proves this register flushed. */
+            if (may_write(insn[j], r))
+                return ftz_writer(insn[j]) && B(insn[j], 0, 8) == r && B(insn[j], 16, 3) == 7 && !B(insn[j], 19, 1);
             if (block_start && block_start[j]) break;
         }
     return !c->tainted[r];

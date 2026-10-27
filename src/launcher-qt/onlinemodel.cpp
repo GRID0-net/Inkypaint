@@ -14,12 +14,16 @@ static const QString network = "Network";
 OnlineModel::OnlineModel(QObject* parent) : QObject(parent) {
     QSettings s;
     username_ = s.value("grid0User").toString();
+    // Old Windows builds saved the credential but couldn't persist QSettings
+    // with an empty organization. load() still checks/decrypts it below.
+    if (username_.isEmpty()) username_ = Grid0Credentials::savedAccount();
     server_ = s.value("grid0Server", Grid0::defaultServer).toString();
     if (!username_.isEmpty()) {
         QString password = Grid0Credentials::load(username_);
         if (!password.isNull()) {
             session_ = new Grid0Session(server_, username_, password, this);
             account_ = "signedIn";
+            s.setValue("grid0User", username_);
         }
     }
     connect(&patches_, &Grid0Patches::changed, this, &OnlineModel::changed);

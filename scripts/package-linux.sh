@@ -105,6 +105,13 @@ done
 for m in QtQuick QtQml QtCore QtNetwork QtWayland; do
     [ -d "$qt/qml/$m" ] && cp -R "$qt/qml/$m" "$out/qml/"
 done
+# Qt Quick's fallback file/folder pickers import this module. Native dialogs
+# aren't available on every desktop, so it must ship even if build-time scans
+# only see our direct QtQuick.Dialogs import.
+foldermodel="$qt/qml/Qt/labs/folderlistmodel"
+[ -d "$foldermodel" ] || die "Qt's fallback file picker needs $foldermodel"
+mkdir -p "$out/qml/Qt/labs"
+cp -R "$foldermodel" "$out/qml/Qt/labs/"
 printf '[Paths]\nPrefix = .\nPlugins = plugins\nQmlImports = qml\nLibraries = lib\n' > "$out/qt.conf"
 # every Qt library (and Qt's ICU) the launcher, a plugin or a QML module needs, until none is missing. The system's own
 # (libc, libGL, libxcb, Wayland's, fontconfig) stay the system's; the xcb utility libraries Qt's X11 plugin needs and

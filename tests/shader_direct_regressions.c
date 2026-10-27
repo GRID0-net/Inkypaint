@@ -749,6 +749,32 @@ static void float_controls(void) {
     free(code);
 }
 
+/* An FTZ instruction writing R64 must not certify R65-R67 as flushed. The broad
+   may-write scan is conservative about clobbers, not proof of an actual store. */
+static void float_flush_adjacent_registers(void) {
+    for (u32 r = 65; r <= 67; r++) {
+        const u64 load = 0x0100000000071000ull | (1ull << 20) | r; /* smallest subnormal */
+        /* With the operand kept, 2^-149 * 2^126 becomes a normal 2^-23.
+           Console FTZ consumes zero instead, so the result must be zero. */
+        const u64 large = 0x0100000000071005ull | (0x7e800000ull << 20);
+        const u64 use = FMUL_FTZ | 8ull | ((u64)r << 8) | (5ull << 20);
+        const u64 harmless = FMUL_FTZ | (255ull << 8) | (255ull << 20);
+        const u64 plain[] = {load, large, harmless | 96ull, use};
+        const u64 adjacent[] = {load, large, harmless | 64ull, use};
+        ShaderInfo info;
+        size_t na = 0, nb = 0;
+        u32* a = translate(plain, 4, ST_FS, &info, &na, SH_FTZ_EMULATE);
+        check_translated(a, &info, "baseline subnormal operand translates");
+        u32* b = translate(adjacent, 4, ST_FS, &info, &nb, SH_FTZ_EMULATE);
+        check_translated(b, &info, "adjacent FTZ write translates");
+        if (a && b)
+            check(count_opcode(a, na, 184, 0xffffffffu) == count_opcode(b, nb, 184, 0xffffffffu),
+                  "writing R64 must keep the subnormal flush on an adjacent register");
+        free(a);
+        free(b);
+    }
+}
+
 static void precise_math(void) {
     const u64 math[] = {FMUL_KEEP, FMUL_IMM};
     const int stages[] = {ST_VS, ST_FS, ST_CS};
@@ -2703,6 +2729,7 @@ int main(int argc, char** argv) {
     f2i_modifiers();
     global_buffers();
     float_controls();
+    float_flush_adjacent_registers();
     precise_math();
     metal_math();
     f2f_half_rounding();

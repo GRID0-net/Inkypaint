@@ -4,6 +4,7 @@
 // (src/launcher). It sets the game up from the player's own files with the bundled runtime, edits its settings, signs
 // in to GRID0+ and starts the game
 #include "appmodel.h"
+#include "launchersettings.h"
 #include <QGuiApplication>
 #include <QIcon>
 #include <QQmlApplicationEngine>
@@ -13,13 +14,13 @@
 #include <QTimer>
 
 int main(int argc, char** argv) {
-    QGuiApplication::setOrganizationName(QString());
-    QGuiApplication::setApplicationName("inkypaint");
+    initializeLauncherIdentity();
     QGuiApplication::setApplicationDisplayName("inkypaint");
     QGuiApplication::setDesktopFileName("inkypaint"); // Wayland matches the window to inkypaint.desktop by it
     QGuiApplication app(argc, argv);
     app.setWindowIcon(QIcon(":/inkypaint/assets/AppIcon.png"));
     QQuickStyle::setStyle("Basic"); // drawn by the app's own components, the same on every system
+    migrateLauncherSettings();
     AppModel model;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("app", &model);

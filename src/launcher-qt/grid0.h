@@ -60,6 +60,7 @@ private:
 /// The password GRID0+ signs in with, kept for the game: protected with DPAPI on Windows (for this Windows user alone),
 /// an owner-only file elsewhere, in the app's data folder
 namespace Grid0Credentials {
+QString savedAccount();
 bool save(const QString& account, const QString& password, QString* error);
 QString load(const QString& account);
 void remove(const QString& account);

@@ -26,7 +26,7 @@ you'll need:
 
 1. open inkypaint. The **Game Files** page asks for the two NSPs and your keys (or a folder that holds them).
 2. it asks whether you want to play online. Sign in to GRID0+ there and its patches are compiled in on the first go.
-   No account yet? Use `/register` with the GRID0+ bot on the GRID0 Discord server.
+   Don't have an account? [Register here!](https://discord.gg/splatfest) Use `/register` with the GRID0+ bot on the Splatfest Discord server.
 3. press **Prepare Splatoon 3** and let it finish. then press **Play**!
 
 Mods: the **Mods** page adds RomFS mods (folders or archives) that apply the next time the game starts, no recompile

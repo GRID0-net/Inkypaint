@@ -146,9 +146,18 @@ struct SignInCard: View {
                 }
                 .font(.callout)
 
+                HStack(spacing: 10) {
+                    Text("Don't have an account?").foregroundStyle(.secondary)
+                    Link("Register here!", destination: URL(string: "https://discord.gg/splatfest")!)
+                        .buttonStyle(.glass)
+                }
+                .font(.callout)
+                Text("Use /register with the GRID0+ bot on the Splatfest Discord server.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 HStack {
-                    Text("No account yet? Use /register with the GRID0+ bot on the GRID0 Discord server. Your password "
-                         + "stays on this Mac.")
+                    Text("Your password stays on this Mac.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

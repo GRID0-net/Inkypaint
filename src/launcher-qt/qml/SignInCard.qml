@@ -44,9 +44,23 @@ GlassCard {
         }
         RowLayout {
             Layout.fillWidth: true
+            spacing: 10
+            InkText { text: "Don't have an account?"; kind: "secondary" }
+            InkButton {
+                text: "Register here!"
+                onClicked: Qt.openUrlExternally("https://discord.gg/splatfest")
+            }
+        }
+        InkText {
+            text: "Use /register with the GRID0+ bot on the Splatfest Discord server."
+            kind: "caption"
+            Layout.fillWidth: true
+        }
+        RowLayout {
+            Layout.fillWidth: true
             spacing: 16
             InkText {
-                text: "No account yet? Use /register with the GRID0+ bot on the GRID0 Discord server. Your password stays on this PC, "
+                text: "Your password stays on this PC, "
                     + (Qt.platform.os === "windows" ? "protected for your Windows account." : "readable only by your user.")
                 kind: "caption"
                 Layout.fillWidth: true

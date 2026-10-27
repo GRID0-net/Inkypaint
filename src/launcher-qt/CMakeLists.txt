@@ -14,7 +14,7 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Gui Network Qml Quick QuickControls2)
 qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(inkypaint WIN32
-    main.cpp game.cpp game.h inifile.cpp inifile.h gamesettings.cpp gamesettings.h preparer.cpp preparer.h
+    main.cpp launchersettings.cpp launchersettings.h game.cpp game.h inifile.cpp inifile.h gamesettings.cpp gamesettings.h preparer.cpp preparer.h
     grid0.cpp grid0.h grid0patches.cpp grid0patches.h onlinemodel.cpp onlinemodel.h modfiles.cpp modfiles.h modsmodel.cpp modsmodel.h
     appmodel.cpp appmodel.h)
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -38,3 +38,16 @@ if(WIN32)
     target_compile_definitions(inkypaint PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
 install(TARGETS inkypaint RUNTIME DESTINATION .)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-state EXCLUDE_FROM_ALL
+        ../../tests/launcher_qt_state.cpp launchersettings.cpp game.cpp)
+    target_include_directories(inkypaint-test-state PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(inkypaint-test-state PRIVATE Qt6::Gui)
+    add_test(NAME launcher_state_relaunch COMMAND inkypaint-test-state)
+endif()
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-dialogs EXCLUDE_FROM_ALL ../../tests/launcher_qt_dialogs.cpp)
+    target_link_libraries(inkypaint-test-dialogs PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+endif()
