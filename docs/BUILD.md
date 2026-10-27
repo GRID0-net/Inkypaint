@@ -1,6 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Copyright 2026 the ScarletNX contributors -->
-# Build
+# building inkypaint!
+
+if you want the launcher and everything it needs, use the [package commands in the README](../README.md#building)!
+macOS uses `./inkypaint.sh launcher`, Windows uses `./inkypaint.sh windows`, and Linux uses
+`scripts/package-linux.sh`.
+
+the rest of this page goes into the runtime toolchains. it's inherited from ScarletNX, so broader platform and
+build-variant examples aren't a promise that inkypaint supports those targets.
 
 ## Index
 
@@ -38,7 +45,7 @@ Run from checkout root. [Extract/AOT/run](USAGE.md) · [Tests/diagnostics](DEVEL
   SDL3 remains a required build dependency.
 - **FFmpeg:** required by every NX runtime build. CMake builds the pinned source release.
   Avoid spaces in checkout/cache paths.
-- **OpenSSL:** required by every build with the NX or 3DS loaders (hashes, ciphers, the ssl service's TLS). CMake
+- **OpenSSL:** required by the NX runtime (hashes, ciphers, the ssl service's TLS). CMake
   builds the pinned source release with OpenSSL's Configure, which needs **Perl**.
 
 ## Linux / FreeBSD
@@ -208,7 +215,7 @@ brew install cmake ninja
 
    `<moltenvk>` is the extracted `MoltenVK-macos.tar` of the
    [Ryujinx MoltenVK release](https://github.com/V380-Ori/Ryujinx.MoltenVK/releases) that
-   `.github/workflows/build.yml` pins (`MOLTENVK_RELEASE`, with its SHA-256). **Do not leave it out.** Without it the
+   `scripts/package-launcher.sh` locates for the inkypaint app. **Do not leave it out.** Without it the
    app has no MoltenVK, and on a Mac without Homebrew's it stops at startup with
    `SDL could not open a Vulkan window: Failed to load Vulkan Portability library`.
 
@@ -248,8 +255,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ## Windows / MSYS2 CLANG64
 
-The `windows` job in [build.yml](../.github/workflows/build.yml) builds this way. Clang, LLVM and the FFmpeg and
-OpenSSL build tools come from MSYS2, not from `bootstrap.ps1`. Keep `env.ps1` out of this shell: llvm-mingw's C++
+this is the native MSYS2 route. inkypaint's [release workflow](../.github/workflows/release.yml) instead uses the
+cross-build package script. here, Clang, LLVM and the FFmpeg and OpenSSL build tools come from MSYS2, not
+from `bootstrap.ps1`. Keep `env.ps1` out of this shell: llvm-mingw's C++
 runtime must not mix with another LLVM build.
 
 1. Install MSYS2 from [msys2.org](https://www.msys2.org/) and open the **MSYS2 CLANG64** shell. Run every step below
@@ -344,8 +352,6 @@ cmake --preset default -B build -DSNX_FFMPEG_ASM=OFF && cmake --build build
 - `-DSNX_DEPS_CACHE=/path`: reuse and publish finished FFmpeg and OpenSSL builds there (default: the environment's
   `SNX_DEPS_CACHE`, else none).
 - `-DSNX_BUILD_NX=OFF`: omit the Switch runtime (default ON).
-- `-DSNX_BUILD_GNUABI=OFF`: omit the CPU-only Linux AArch64 runtime, see [GNUABI.md](GNUABI.md) (default ON).
-- `-DSNX_BUILD_3DS=OFF`: omit the 3DS layer, see [3DS.md](3DS.md) (default ON).
 - `-DSNX_BUILD_GUI=OFF`: omit the SDL3 launcher. The default is ON when `SNX_BUILD_NX` is on and `SNX_TOOLS_ONLY`
   is not, OFF otherwise.
 - `-DSNX_TOOLS_ONLY=ON`: build the extraction/recompilation driver without the runtime, see below (default OFF).
@@ -364,8 +370,6 @@ Test options, read when `BUILD_TESTING` is on (CTest's default), all OFF by defa
   macOS jobs run them.
 - `-DSNX_TEST_A64_FP_DIFF=ON`: add the AArch64 FP differential test, which needs Python unicorn 2.1.4 and a native
   Linux host.
-- `-DSNX_TEST_ARM_AOT=ON`, `-DSNX_TEST_ARM_DIFF=ON`: the 3DS ARM11 witnesses and the A32 unicorn comparison, see
-  [3DS.md](3DS.md).
 
 ```sh
 # Build without the GUI launcher; SDL3 remains required by the runtime:
@@ -432,7 +436,7 @@ cmake --install build --prefix stage
 # -> stage/bin/, stage/share/licenses/scarletnx/
 ```
 
-AppImage: run inside pkgforge's Arch container with `quick-sharun` ([CI setup](../.github/workflows/build.yml)), as
+the inherited AppImage route uses pkgforge's Arch container with `quick-sharun`, as
 [Anylinux-AppImages](https://github.com/pkgforge-dev/Anylinux-AppImages) makes them; its
 [FAQ](https://github.com/pkgforge-dev/Anylinux-AppImages/blob/main/FAQ.md) is the reference, not the official AppImage
 documentation:
@@ -453,12 +457,7 @@ takes the version in `LLVM_VERSION` (CI gives it the container's, whose `opt` pr
 and with `SNX_SYSROOT` set it cross-builds for another architecture. `SNX_A64_DISASM=OFF` leaves out `scarletnx
 --mcp`'s A64 disassembler, which is for working on the runtime.
 
-`scarletnx-3ds` and `scarletnx-gnuabi` are names of `scarletnx` on Linux and macOS (`SNX_MULTICALL`,
-`src/multicall`), links beside it as `scarletnx-switch` is: one program carries LLVM, SDL and the code the drivers
-share once. Windows, whose zips keep no links, has three programs, as Android and iOS do.
-
-[Nightly AppImages](https://github.com/scarletnx/nightly/releases/latest), x86_64 and aarch64 · [Launch](USAGE.md).
-
-A pull request's own builds are linked from a comment on it once CI has built them.
+inkypaint's Linux package is a portable `.tar.gz`, rather than the upstream AppImage. use
+`scripts/package-linux.sh` for that. the removed console and Linux ABI drivers aren't built by this fork.
 
 [Licenses/credits](CREDITS.md) · [Architecture](ARCHITECTURE.md) · [Roadmap](ROADMAP.md).

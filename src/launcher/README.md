@@ -1,7 +1,7 @@
-# inkypaint launcher
+# the macOS launcher!
 
-The macOS app that sets up and starts Splatoon 3. It is written in SwiftUI for macOS 26 and later, uses Liquid Glass,
-and has three panes:
+the SwiftUI launcher for macOS 26 and later! it handles setting up Splatoon 3, starting it, and signing into GRID0+.
+these are the main pages:
 
 - **Play**: starts the game and stops it. It also shows the frame rate, resolution and shader settings.
 - **Online**: online play on GRID0+, the community's servers. You sign in with your GRID0+ account, see your friend
@@ -40,8 +40,8 @@ environment variables:
 | The extraction and the recompiled game | `~/Library/Application Support/inkypaint/data` (or the data folder you chose) |
 | Game output (one log per launch) | `~/Library/Logs/inkypaint` |
 
-Game Files shows the data folder. A newer app brings a newer runtime: it is copied over the game's copy the next
-time you press Play.
+**Game Files** shows where your data lives. when you update the app, it copies the newer runtime over the game's
+copy next time you press **Play**. a runtime-only fix normally doesn't need a whole game recompile!
 
 The ink splats in `dist/launcher` are white masks, tinted where they are drawn. The app's icon is there too. The
 repository keeps its binaries in `dist/`, so the script copies them into the app, and a run from Xcode reads them

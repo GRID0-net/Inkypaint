@@ -1,4 +1,4 @@
-# Roadmap
+# what's next!
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for status, limitations and planned work.
-Completed changes and their verification are recorded in Git history.
+[the inkypaint roadmap is here](ROADMAP-INKYPAINT.md)! performance, faster recompiles, Windows compatibility,
+and multiplayer testing are the main things right now.

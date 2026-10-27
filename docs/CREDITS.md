@@ -2,8 +2,10 @@
 <!-- Copyright 2026 the ScarletNX contributors -->
 # Licenses and credits
 
-ScarletNX is [GPL-3.0-or-later](../LICENSE).
-Generated modules include runtime ABI code. Game assets, keys and firmware are excluded.
+inkypaint is built on ScarletNX, and wouldn't exist without it! both are [GPL-3.0-or-later](../LICENSE).
+the table below keeps the credits and licenses for the code and dependencies used along the way.
+
+generated modules include runtime ABI code. game assets, keys and firmware aren't included.
 
 | Component | License |
 | --- | --- |

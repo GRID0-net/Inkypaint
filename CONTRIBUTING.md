@@ -1,14 +1,17 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Copyright 2026 the ScarletNX contributors -->
-# Contributing
+# contributing!
 
-[Build](docs/BUILD.md) · [development](docs/DEVELOPMENT.md) · [architecture](docs/ARCHITECTURE.md) ·
-[agent rules](CLAUDE.md).
+want to help out? rendering fixes, performance work, launcher improvements, and useful bug reports are all welcome!
+this fork is specifically for Splatoon 3 11.3.0.
+
+[build instructions](docs/BUILD.md) · [development](docs/DEVELOPMENT.md) · [architecture](docs/ARCHITECTURE.md) ·
+[agent rules](CLAUDE.md)
 
 ## Game data stays out
 
-Nothing of a game goes into git, an issue, a pull request or a comment: keys, dumps (XCI, NSP, NCA, CIA), `work/`,
-`games/` and shader or texture dumps. [CLAUDE.md](CLAUDE.md) has the full rule.
+please keep game data out of git and reports! no keys, game dumps, extracted files, generated game code, or shader
+and texture dumps. use your own local files for testing. [CLAUDE.md](CLAUDE.md) has the full rule.
 
 ## Build and check
 
@@ -27,8 +30,8 @@ doesn't check formatting, so run it locally. Configuring with `-DSNX_TEST_SANITI
 regression tests, and the programs and libraries they run or link, with ASan and UBSan. That build is for tests only and
 is not deployed.
 
-A build is not a test. A runtime change is verified by running the game through the scene it affects, and the commit
-says what was run. [DEVELOPMENT.md](docs/DEVELOPMENT.md) has the run and diagnose commands, and
+if a change builds, that's a start, but please test the scene it actually affects too! say what you ran and what
+happened. if you can't test on the affected platform, say that instead of calling it fixed. [DEVELOPMENT.md](docs/DEVELOPMENT.md) has the run and diagnose commands, and
 [TESTING.md](docs/TESTING.md) the form a test report takes: the build, the machine, the scene, the runs and the result.
 
 ## Commits
@@ -48,20 +51,19 @@ Signed-off-by: Your Name <you@example.org>
 
 Common areas, from the history: `[gui]`, `[shader]`, `[ci]`, `[runtime]`, `[gpu]`, `[audio]`, `[cmake]`, `[docs]`,
 `[cpu]`, `[hid]`, `[hle]`, `[test]`, `[build]`, `[kernel]`, `[driver]`, `[cli]`, `[android]`, `[vk]`, `[dist]`,
-`[agents]`, `[3ds]`. Two areas share one bracket, as in `[gui, android]`.
+`[agents]`. Two areas share one bracket, as in `[gui, android]`.
 
 Commit messages and user-facing docs read as plain prose: no em-dash splicing clauses, no semicolons joining
 sentences, no spaced hyphen as a dash.
 
 ## Pull requests
 
-Each run of the Build workflow (`.github/workflows/build.yml`) on a pull request rewrites one comment on it, marked
-`<!-- scarletnx-builds -->`, that links the Linux, AppImage, Windows and Android builds of the head commit and names
-any job that did not build (`scripts/pr-builds.sh`). A pull request from a fork gets no comment, since its token may
-not write.
+keep the PR focused on what changed, why, and what you tested. a rendering fix should say which scene you checked,
+and a performance change should include measurements from comparable runs. no need to claim a speedup you haven't
+measured!
 
-GitHub asks the owners of the files a pull request changes for their review once it is out of draft:
-`.github/CODEOWNERS` names those of the CI, GUI, GPU and CPU code, and of the 3DS and the Vita.
+the workflows in `.github/workflows/` check the tree and build packages. local game testing still matters,
+especially for online battles and hardware-specific bugs.
 
 ## C code
 

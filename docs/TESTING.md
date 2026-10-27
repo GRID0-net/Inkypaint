@@ -1,6 +1,15 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Copyright 2026 the ScarletNX contributors -->
-# Testing and reporting
+# testing and reporting!
+
+if something breaks, tell me what you were doing, what machine you're on, and include the log!
+for online issues, say whether it was LAN / GRID0 ZeroTier or GRID0+ too. they use different paths.
+
+the runtime's log is `recompiled/0100C2500FC20000/0100C2500FC20000.log` in your data folder. the launcher also keeps
+one output log per launch: `%LOCALAPPDATA%\inkypaint\logs` on Windows, `~/Library/Logs/inkypaint` on macOS, or
+`~/.local/share/inkypaint/logs` on Linux.
+
+please check logs for personal information before sharing. no passwords, keys, game files, or shader dumps.
 
 [Usage](USAGE.md) · [development](DEVELOPMENT.md) · [contributing](../CONTRIBUTING.md) · [edenprobe](EDENPROBE.md).
 What to say in a test report so it can be compared with the last one. Nothing of a game goes into a report: no keys,
@@ -27,9 +36,9 @@ Say what ran, for how long and how it ended:
 
 ## Which build
 
-- A nightly: its tag, `nightly-<date>-<commit>`.
-- A pull request's build: `pr-<number>` and the commit in its release notes. The next push replaces it.
-- A build from source: `git rev-parse --short HEAD`, and whether the tree was clean.
+- a release: its version tag and which package you downloaded.
+- an Actions artifact or a test runtime: the commit or filename you were given.
+- a source build: `git rev-parse --short HEAD`, and whether you had local changes.
 
 The game's log starts with a `build:` line that says the same. A game's code is recompiled only when the recompiler
 changes ([CLAUDE.md](../CLAUDE.md)), so a `games/` folder made by an older build can still hold old code. Say so if you
@@ -37,8 +46,8 @@ tested with one.
 
 ## A game that does not run as it should
 
-Use the [Game report](https://github.com/scarletnx/ScarletNX/issues/new?template=game-report.yml) form. The title is
-`[game] <name>: <symptom in a few words>`.
+use [inkypaint's bug report form](https://github.com/GRID0-net/Inkypaint/issues/new?template=bug-report.yml).
+a short title describing what broke is fine!
 
 | Field | What goes in it |
 | --- | --- |

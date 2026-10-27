@@ -6,7 +6,6 @@
 - keys: a line as prod.keys or title.keys has them (a key's name or a rights ID, then 16 bytes or more of hex);
 - dumps: a game's or the system's files, by extension or by magic (NSO, NRO, NCA, NSP, XCI, KIP, INI1, 3DS);
 - binaries outside dist/: a prebuilt library or a game's asset (dist/ holds the icons and the controls' atlas);
-- the console maker's name as a word, not inside an identifier, a path or a domain (SDL_GAMEPAD_TYPE_..., a host);
 - the names of piracy sites and of the tools that install pirated games.
 
 Patches are checked on what they add: their context and removed lines are the patched project's own text.
@@ -48,8 +47,6 @@ MAGIC = (
     (0x100, b'NCCH', '3DS NCCH'),
     (0x0, b'3DSX', '3DSX'),
 )
-# a letter, digit, _, / or - beside it makes it part of a name, a path or a host; so does a dot before a letter
-MAKER = re.compile(r'(?<![A-Za-z0-9_/-])nintendo(?![A-Za-z0-9_/-])(?!\.[A-Za-z])', re.IGNORECASE)
 HUNK = re.compile(r'@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@')
 PIRACY = re.compile(r'\b(nsw2u|nxbrew|romsfun|ziperto|hshop|nopaystation|tinfoil|sigpatch(es)?)\b', re.IGNORECASE)
 
@@ -115,8 +112,6 @@ def check(files):
             where = f'{name}:{number}'
             if KEY_LINE.search(line) or TITLE_KEY_LINE.search(line):
                 errors.append(f'{where}: a key as prod.keys or title.keys holds it')
-            if MAKER.search(line):
-                errors.append(f"{where}: the console maker's name as a word (say the console, or quote the identifier)")
             if PIRACY.search(line):
                 errors.append(f'{where}: {PIRACY.search(line).group(0)}, a piracy site or tool')
     return errors
@@ -128,21 +123,20 @@ PLANTED = {
     'game.nro': b'\0' * 0x10 + b'NRO0' + b'\0' * 0x30,
     'data/blob': b'\x7fELF\0\0\0',
     'nca.dat': b'x' * 0x200 + b'NCA3',
-    'README.md': b"Runs Nintendo games.\nSee nsw2u for games.\nNintendo's fonts.\nKeywords=Nintendo;Switch;\n",
-    'docs/end.md': b'as made by NINTENDO.\n',
-    'cmake/x.patch': b'# ours: Nintendo layout\n--- a/x.c\n+++ b/x.c\n@@ -1,3 +1,3 @@ Nintendo context\n'
-    b'--- Nintendo, a removed Lua comment\n /* Nintendo header */\n+/* Nintendo PSS */\n \\o/ Nintendo\n'
+    'README.md': b"See nsw2u for games.\n",
+    'cmake/x.patch': b'# header_key = 00112233445566778899aabbccddeeff\n'
+    b'--- a/x.c\n+++ b/x.c\n@@ -1,3 +1,3 @@ Nintendo context\n'
+    b'-header_key = 00112233445566778899aabbccddeeff\n'
+    b' header_key = 00112233445566778899aabbccddeeff\n'
+    b'+header_key = 00112233445566778899aabbccddeeff\n'
+    b' context\n'
     b'\\ No newline at end of file\n',
 }
 WANT = [
-    'README.md:1: the console maker',
-    'README.md:2: nsw2u',
-    'README.md:3: the console maker',
-    'README.md:4: the console maker',
-    'cmake/x.patch:1: the console maker',
-    'cmake/x.patch:7: the console maker',
+    'README.md:1: nsw2u',
+    'cmake/x.patch:1: a key',
+    'cmake/x.patch:7: a key',
     'data/blob: a binary outside',
-    'docs/end.md:1: the console maker',
     'game.nro: NRO by its magic',
     'game.nro: a binary outside',
     'game.nro: a dump file',
@@ -151,6 +145,8 @@ WANT = [
     'nca.dat: NCA by its magic',
 ]
 CLEAN = {
+    'docs/attribution.md': b"Splatoon belongs to Nintendo. inkypaint isn't affiliated with or endorsed by Nintendo.\n"
+    b"GRID0+ uses its own servers, not Nintendo's.\n",
     'src/pad.c': b'case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO: /* FontNintendoExtended, NintendoSDK */\n',
     'src/hosts.inc': b'BLOCKED_HOST("nintendo.net") /* srv.nintendo.net, nintendo-europe.com, nintendowifi.net */\n',
     'docs/a.md': b'`source/board/nintendo/nx/kern.cpp` and https://www.nintendo.com/\n',

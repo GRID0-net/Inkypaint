@@ -1,6 +1,14 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Copyright 2026 the ScarletNX contributors -->
-# Usage
+# using inkypaint!
+
+the easiest way is the launcher! open **Game Files**, select your base NSP, 11.3.0 update and keys, then prepare
+the game. once that's done, press **Play**. you only need another recompile when something changes the generated
+code, like a code mod or an incompatible runtime update.
+
+for multiplayer, see [LAN and GRID0+](NETWORKING.md). if you're using the runtime directly, the commands below
+cover that. they're inherited from ScarletNX, so generic game and NRO examples don't expand inkypaint's supported
+games beyond Splatoon 3 11.3.0.
 
 ## Index
 

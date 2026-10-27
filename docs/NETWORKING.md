@@ -1,135 +1,87 @@
-# Shared networking
+# multiplayer!
 
-## Index
+LAN through GRID0 ZeroTier, or online through GRID0+! these are two separate ways to play.
 
-* [Layout and translation tables](#layout-and-translation-tables)
-* [Runtime behavior](#runtime-behavior)
-* [Current limitations](#current-limitations)
-* [Tests](#tests)
+## LAN / GRID0 ZeroTier
 
-`src/common/network` is the C networking backend used by both runtimes. TCP and UDP
-use host sockets; ICMP echo has a partial emulation for hosts that refuse raw
-sockets. Host descriptors are never exposed directly to guests.
+use the game's LAN mode with everyone on the same LAN, or join the same GRID0 ZeroTier network to do it over
+the internet. ZeroTier gives you the shared network, the game still uses LAN play.
 
-This ports the networking design and service behavior from Eden's
-`lizzie/refactor-networking-12`, revision
-`2014a5778273eef450bf3a48530d703750487a18`, principally
-`src/core/internal_network/` and the sockets/NIFM services. Source files retain
-Eden/yuzu notices where adapted. This is a C adaptation, not a vendored copy of
-Eden's C++ runtime.
+in the launcher:
 
-## Layout and translation tables
+1. enable **Network** in **Settings > LAN play**.
+2. if you're using ZeroTier, select its adapter in **LAN adapter**. auto normally picks your internet connection,
+   which might not be the ZeroTier one!
+3. use the game's LAN mode to host or join with your friends.
 
-- `src/common/network/`: reference-counted sockets, host ABI translation, poll,
-  cancellation, timeouts, ICMP, eventfd, resolver and interface discovery.
-- `src/gnuabi/network/`: AArch64 Linux syscall/layout translation and resolver files.
-  Sockets share the VFS descriptor namespace and open-file lifetime with ordinary
-  files, including `dup`, `read`, `write`, `fcntl`, `ioctl` and `fstat`.
-- `src/nx/hle/services/network/`: BSD IPC, sfdnsres/nsd and NIFM adapters.
+you don't need a GRID0+ account for this. everyone needs to be on the same game version too, this port uses 11.3.0.
 
-Each layer's `abi/*.inc` files are re-includable X-macro tables. Common tables
-cover errno (including Winsock), domains, socket types, levels/options, message
-and poll flags, and resolver errors/flags. Guest tables cover their Linux or
-Horizon constants and Linux syscall numbers. Define the relevant row macro before
-including a table; tables clean up the macros afterwards. Add mappings there
-rather than introducing parallel switch statements or relying on host numbers.
-Option tables also specify the value layout. Address and port bytes remain in
-network byte order in the shared `SnxSockAddr` representation; the IPC resolver's
-serialized records have their own wire encoding.
+if you're editing the game's `.ini` directly, these go under `[Network]`:
 
-Host sockets stay nonblocking. Guest blocking is implemented by waiting for
-readiness with receive/send deadlines. The cancellation API wakes blocked waits;
-callers retaining a socket reference can safely finish I/O after a descriptor is
-closed. This library does not provide an Ethernet/IP virtual machine. Local
-wireless (`net_ldn.c`) travels two ways. On the LAN it speaks the protocol of
-the ldn_mitm sysmodule, which Ryujinx's LdnMitm client speaks too, over UDP and
-TCP 11452 on the console's interface. Through an Eden room (`net_room.c`, the
-protocol of Eden's room server) one ENet connection carries ldn's messages and
-the game's UDP datagrams, each datagram's bytes a zstd frame, to the room, which
-relays them to the other members. The console's address is the one the room
-gives it, for ldn, nifm and the game's datagram sockets, which are the room's.
-TCP sockets stay the host's: Eden makes every socket the room's and answers
-TCP's calls without sending anything, and a room carries datagrams alone. A
-datagram carries Eden's protocol number for its socket (1 for a socket opened
-with protocol 0, 4 for UDP) and reaches only a socket of the same one, so an
-Eden and a ScarletNX of one game meet. At exit every ldn closes its network
-before the console leaves the room, since an Eden on the other side hears only
-that, never who left.
-
-## Runtime behavior
-
-GNU ABI networking uses the host connection. Its read-only virtual `/etc` contains
-`resolv.conf`, `hosts`, `nsswitch.conf`, `protocols`, and `services`. Guest libc can
-resolve names using those files and ordinary UDP/TCP DNS. No arbitrary host file
-paths become accessible; AF_UNIX pathname bind/connect is unsupported, while
-`socketpair` is supported.
-
-NX defaults to `network=0`. It reports offline through NIFM, permits outbound
-loopback destinations and numeric/localhost resolution. Set `network=1` in the
-runtime options to use host networking and host-derived NIFM configuration.
-Known service domains in `blocked_hosts.inc` are blocked in the NX resolver.
-This is **not a security sandbox or an IP firewall**: direct IP traffic is not
-filtered by that domain list, and listeners bind host interfaces. Use OS-level
-network isolation for untrusted guests.
-
-ICMP first uses a native socket where permitted, then an unprivileged ping
-socket, then POSIX `ping`/`ping6` or Windows `IcmpSendEcho`. The helper backend
-synthesizes an echo reply only after the host helper reports success. It preserves
-the request identifier, sequence and payload, and adds an IPv4 header for raw
-IPv4 receives. Without a usable backend, sends can be accepted but receive waits
-time out; no successful live echo is fabricated. Other ICMP message types are
-not emulated. The Windows helper currently supports IPv4 only.
-
-## Current limitations
-
-- Host resolver calls are synchronous and not interrupted by socket cancellation.
-- GNU ABI still runs one guest thread. Poll/select signal masks are not delivered.
-- Epoll approximates edge-triggered requests with level readiness, supports
-  oneshot, and does not expose nested epoll readiness through poll.
-- Ancillary/control messages are not forwarded. `recvmsg` reports no control data.
-- `recvmmsg` does not yet implement its timeout argument.
-- Eventfd overflow returns `EAGAIN`, including for a blocking write.
-- NX descriptor state belongs to each service object and its cloned sessions;
-  separate registrations do not yet join a process-wide shared-client table.
-- NX's resolver serialization and NIFM profiles have not been validated in a game.
-  Several system-only commands remain stubs or return unsupported errors.
-
-## Tests
-
-The dependency-light tests run even with NX disabled:
-
-```sh
-cmake -S . -B build/gnuabi -DSNX_BUILD_NX=OFF
-cmake --build build/gnuabi
-ctest --test-dir build/gnuabi --output-on-failure
+```ini
+network=1
+lan_adapter=virtual
 ```
 
-- `network_stack`: host loopback TCP/UDP, options, timeout/nonblocking behavior,
-  polling, socketpair, eventfd, cancellation, numeric resolution and interfaces.
-  Its live ICMP check explicitly reports a skip when no echo arrives.
-- `network_icmp`: deterministic injected-reply tests of odd-length checksums,
-  headers, truncation, peek ownership, queue limits and missing-helper cleanup.
-  These do not claim to prove host connectivity.
-- `gnuabi_network`: direct guest-memory/syscall tests, descriptor ownership,
-  epoll/select, socket metadata and filesystem isolation.
-- `bsd_service`: production BSD dispatch with a stubbed kernel; checks guest
-  sockaddr/constants, TCP/UDP, poll/select, options, eventfd, offline rejection,
-  exact error reply sizes and zero-length receives.
-- `ldn_room`: an Eden room (`net_room.c`) against a room server in the test
-  (`fake_room.c`): the messages, the join and its refusals, ldn's networks and the
-  game's datagram sockets through it.
-- `room_service`: what `ldn=room` reads before it joins (`room.c`): `room`'s address,
-  `users/online.ini`'s password, and what stops the game.
+`virtual` looks for an active ZeroTier, Hamachi or Radmin adapter. you can also give `lan_adapter` a specific
+adapter name or IPv4 address. empty or `auto` uses the default-route adapter. `all` sends broadcasts over every
+adapter, but it's experimental, so picking the right adapter is preferable.
 
-An optional static AArch64 libc fixture exercises the complete ELF-to-native
-execution path, without external DNS or ICMP requirements:
+## GRID0+
 
-```sh
-aarch64-linux-gnu-gcc -static -O1 tests/gnuabi/network.c -o /tmp/network-aarch64
-# Alternatively: zig cc -target aarch64-linux-musl -static -O1 tests/gnuabi/network.c -o /tmp/network-aarch64
-timeout 60 build/gnuabi/scarletnx-gnuabi --cc=clang /tmp/network-aarch64
-```
+the NSO replacement! this is for the game's online path, using GRID0+'s community servers.
 
-Expected stdout: `network test: ok`. The fixture is separate from the freestanding
-CPU/syscall suites because it needs an AArch64 libc/toolchain. Build/test success
-is not game validation; no game scene has been tested for this port.
+sign in on the launcher's **Online** page, enable online play, and let it install the game patches. the patches
+change game code, so they need a recompile before they'll take effect. signing in before the first setup avoids
+doing that recompile twice.
+
+the launcher sets `network=1`, `grid0=1`, `grid0_server` and `grid0_user`, then passes your password to the game
+through stdin. it doesn't put the password in the command line or the game's `.ini`.
+
+inkypaint redirects the relevant server names, supplies account and friend services, and provides certificates
+for the game's TLS. the trusted roots come from the host with the SwitchNet CA added, so firmware isn't needed
+for that certificate store. this isn't just turning certificate verification off!
+
+launcher-specific details, including credential storage, are in the [macOS](../src/launcher/README.md) and
+[Windows / Linux](../src/launcher-qt/README.md) docs.
+
+## If it doesn't connect
+
+say whether you're using LAN / ZeroTier or GRID0+, what happens when you try to join, and whether the other player
+sees a disconnect. include the game log and your OS, CPU and GPU. a game hanging before it draws a window doesn't
+by itself tell us the network is the problem!
+
+[here's where to find the logs and what to include](TESTING.md).
+
+## Underneath it
+
+these are the runtime details if you're working on networking rather than just playing!
+
+- `src/common/network/` handles host TCP/UDP sockets, polling, cancellation, timeouts, DNS and adapter discovery.
+- `src/nx/hle/services/network/` implements the game's BSD, DNS, NIFM and GRID0+ service interfaces.
+- `net_iface.c` finds the LAN adapter. `bsd.c` uses it for the address the game sees and where LAN broadcasts go.
+- `grid0.c` handles GRID0+ sign-in and account integration. the launchers handle downloading its game patches.
+
+this builds on Eden's networking design and service behavior from `lizzie/refactor-networking-12`, revision
+`2014a5778273eef450bf3a48530d703750487a18`, mainly `src/core/internal_network/` and its sockets/NIFM services.
+the adapted source keeps its Eden/yuzu notices. it's a C adaptation rather than a vendored copy of the C++ runtime.
+
+host sockets stay nonblocking. a guest's blocking operation waits for readiness with its deadline, and cancellation
+wakes those waits. guest descriptors refer to runtime-owned sockets, not raw host descriptors. the ABI tables in
+`abi/*.inc` translate errors, flags, options and addresses between Horizon and the host.
+
+local wireless (`net_ldn.c`) is separate from the game's native LAN mode. `ldn=lan` uses the ldn_mitm protocol over
+UDP/TCP 11452. the inherited `ldn=room` option uses an Eden room through ENet, relaying local-wireless messages and
+game UDP datagrams. that room support isn't what GRID0+ uses, and it isn't required for a ZeroTier LAN setup.
+
+with `network=0`, NIFM reports offline and the runtime permits loopback traffic and numeric/localhost resolution.
+the blocked-host list is a resolver policy, not a firewall or a security sandbox.
+
+## Testing the runtime
+
+`network_stack`, `network_icmp`, `bsd_service`, `ldn_room` and `room_service` cover sockets, service replies,
+cancellation and the inherited room protocol. GRID0+ has service tests too. use the suites configured for your
+platform, see [development](DEVELOPMENT.md).
+
+passing those tests doesn't prove a real match works! actual LAN and GRID0+ matches still need testing with other
+players, especially when changing timing, socket behavior, or the battle transition.

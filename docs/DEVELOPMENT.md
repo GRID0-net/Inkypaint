@@ -1,6 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Copyright 2026 the ScarletNX contributors -->
-# Development
+# working on inkypaint!
+
+start with the [build instructions](BUILD.md), then test the part you're changing! most runtime fixes don't need
+the whole game recompiled. changes to the generated code or its ABI do, so check [CLAUDE.md](../CLAUDE.md) first.
+
+this page keeps ScarletNX's lower-level tools and examples. use your inkypaint data folder and the Splatoon 3 title
+ID (`0100C2500FC20000`) where an example uses a generic game.
 
 [Architecture](ARCHITECTURE.md) · [build/toolchains](BUILD.md) · [usage](USAGE.md) · [agent rules](../CLAUDE.md) · [contributing](../CONTRIBUTING.md).
 Run from checkout. POSIX examples: Windows uses `python`, `.exe`, PowerShell env syntax.
@@ -26,21 +32,12 @@ Runtime relink deploys to the data folder's `recompiled/` by default (`SNX_RECOM
 Avoid builds during timing runs. Formatting: clang-format 23 + `uv`/pinned Ruff; omit `--check` to write.
 FS tests use production tree/HLE + synthetic temp data; `--only tree|service` selects a suite.
 
-CI: Linux/Windows builds, ABI syntax, native tool/FS regressions, optional Python diagnostics, the Linux AppImages
-and the Windows zip (each then run as installed), the Android APK, and [edenprobe](EDENPROBE.md)'s probes on lavapipe
-against the cases that passed before (`scripts/edenprobe.py`). `.github/workflows/publish.yml` publishes what
-builds everywhere, each said on Discord (`scripts/publish-builds.py`): a version tag pushed (`v1.0.0`; `v1.0.0-rc1` a
-prerelease) as this repository's release of it, the latest, its notes listing the changes since the version before;
-each push to `main` as a release of [scarletnx/nightly](https://github.com/scarletnx/nightly/releases), the newest 30
-kept (this repository's `nightly` prerelease shows the latest's notes); each pull request as a prerelease there,
-`pr-<number>`. The notes and the messages link each download with its size and list what changed (a pull request's
-commits). A fork's pull request is published once someone of the team labels it `publish builds`, after each
-push. The Discord cards of each pull request, each issue and each push to `main` are ReiWimsy's, the bot of
-[scarletnx/discord-bots](https://github.com/scarletnx/discord-bots), which asks GitHub what changed every 30 s: no job
-of this repository draws them. The secrets: `NIGHTLY_TOKEN` (writes that repository's contents) and
-`DISCORD_WEBHOOK_RELEASES` (a version's message). Formatting is checked locally (`scripts/format.sh --check`).
-Verify affected scenes manually, repeat intermittent failures, record evidence/scope.
-Test guest semantics + malformed IPC with synthetic cases.
+the current workflows live in `.github/workflows/`. `checks.yml` runs the repository checks, and `release.yml`
+builds the macOS, Windows and Linux packages. version tags trigger publishing, so don't push a release tag just
+to test a build. running the Release workflow manually keeps the builds as artifacts.
+
+for runtime changes, test the affected scene and write down the result. intermittent bugs need repeated runs.
+synthetic tests are useful for CPU behavior and malformed IPC, but don't prove a match works!
 
 ## Run / diagnose
 

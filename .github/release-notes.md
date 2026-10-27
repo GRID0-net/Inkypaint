@@ -1,9 +1,11 @@
-inkypaint @VERSION@: Splatoon 3 (11.3.0), recompiled to run natively on your PC or Mac, with online play on GRID0+.
+inkypaint @VERSION@!! a Splatoon 3 PC port with ScarletNX as the base, and multiplayer through LAN
+(GRID0 ZeroTier) or the NSO replacement, GRID0+!
 
-**You need your own copy of the game and your own console's keys.** None of the game is in these downloads: the
-launcher turns your copy into the app on your machine (about 13 GB of disk, from half an hour to an hour once).
+**you need your own game dump and your own console's keys!** none of the game comes in these downloads.
+the launcher extracts and recompiles your copy locally. allow about 13 GB of disk space, and half an hour to an
+hour for the first recompile depending on your machine. yes, that takes too long, i'm working on it!
 
-You need:
+you'll need:
 
 - Splatoon 3's base game NSP (`0100C2500FC20000`)
 - Its 11.3.0 update NSP (`0100C2500FC20800`, v2752512)
@@ -18,17 +20,20 @@ You need:
 | macOS 26 on Apple silicon | `inkypaint-@VERSION@-macos-arm64.zip` | unzip, move `inkypaint.app` to Applications |
 | Linux x86_64 (glibc 2.35+, e.g. Ubuntu 22.04, Fedora 36, Debian 12 or newer) | `inkypaint-@VERSION@-linux-x86_64.tar.gz` | unpack, run `./inkypaint` |
 
-`SHA256SUMS` lists every file's checksum.
+`SHA256SUMS` has the checksums if you want to check your download.
 
 ## Getting started
 
-1. Open inkypaint. The **Game Files** page asks for the two NSPs and your keys (or a folder that holds them).
-2. It asks whether you want to play online. Sign in to GRID0+ there and its patches are compiled in on the first go.
+1. open inkypaint. The **Game Files** page asks for the two NSPs and your keys (or a folder that holds them).
+2. it asks whether you want to play online. Sign in to GRID0+ there and its patches are compiled in on the first go.
    No account yet? Use `/register` with the GRID0+ bot on the GRID0 Discord server.
-3. Press **Prepare Splatoon 3** and leave it running. When it's done, press **Play**.
+3. press **Prepare Splatoon 3** and let it finish. then press **Play**!
 
 Mods: the **Mods** page adds RomFS mods (folders or archives) that apply the next time the game starts, no recompile
 needed. Mods that change the game's code (exefs) need one, which the page offers.
+
+LAN works separately from GRID0+! for GRID0 ZeroTier, join the same ZeroTier network as your friends, enable
+networking, and select that adapter under **Settings > LAN play**.
 
 ## Notes for each system
 

@@ -1,7 +1,7 @@
-# inkypaint launcher for Windows and Linux
+# the Windows and Linux launcher!
 
-The app that sets up and starts Splatoon 3 on Windows and Linux, written with Qt 6 Quick. It has the same panes as
-the Mac app (`src/launcher`):
+the Qt 6 Quick launcher! same idea as the [Mac app](../launcher/README.md), just for Windows and Linux.
+it handles setup, settings, mods, and GRID0+ sign-in:
 
 - **Play** starts the game and stops it, and shows the resolution, frame rate, shader and online settings.
 - **Online** is online play on GRID0+: sign-in, your friend code and friends, friend requests, and GRID0+'s patches
@@ -55,7 +55,7 @@ INKYPAINT_RUNTIME=build/macos/scarletnx build/launcher-qt/inkypaint
 | The GRID0+ password | `%LOCALAPPDATA%\inkypaint\Credentials\grid0.json`, protected with Windows' data protection for your account |
 | On Linux | the folder you unpacked; `~/.local/share/inkypaint/data`, `logs` and `Credentials/grid0.json` (readable by you alone) |
 
-Uninstalling leaves the data folder alone, because the prepared game and its saves are yours. The runtime sits in a
+uninstalling leaves your data folder alone! your prepared game and saves stay there. The runtime sits in a
 folder of its own with only the DLLs it needs. A recompile copies those DLLs beside the game's copy of the runtime, and
 the launcher updates them when a newer version brings a newer runtime.
 
