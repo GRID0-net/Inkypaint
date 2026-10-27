@@ -243,6 +243,12 @@ static void answer(SSL* ssl, const char* request, const char* body) {
         snprintf(reply, sizeof reply,
                  "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n%zx\r\n%.*s\r\n%zx\r\n%s\r\n0\r\n\r\n", half,
                  (int)half, friends, strlen(friends) - half, friends + half);
+    } else if (!strncmp(request, "GET /emulator/v1/bcat/0100c2500fc20000/News/test ", 45)) {
+        snprintf(reply, sizeof reply, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nnews");
+    } else if (!strncmp(request, "GET /emulator/v1/bcat/0100c2500fc20000 ", 36)) {
+        const char* manifest = "{\"directories\":[{\"name\":\"News\",\"files\":[{\"name\":\"test\","
+            "\"sha256\":\"19fba0e995b9794fc2c26217bf3b725c2f0d9eeda16719fe75e3ba23ca73bfc4\"}]}]}";
+        snprintf(reply, sizeof reply, "HTTP/1.1 200 OK\r\nContent-Length: %zu\r\n\r\n%s", strlen(manifest), manifest);
     } else if (!strncmp(request, "POST /emulator/v1/presence ", 27)) {
         snprintf(presence, sizeof presence, "%s", body);
         presences++;
@@ -415,6 +421,27 @@ int main(void) {
         }
         svcobj_unref(fs);
         svcobj_unref(creator);
+    }
+
+    /* Verified BCAT manifest and file, including a cache hit and rejected path/hash inputs. */
+    {
+        char* temporary = snx_temp_dir(NULL);
+        char *path, *bytes;
+        size_t n;
+        CHECK(temporary != NULL);
+        snprintf(g_datadir, sizeof g_datadir, "%s/", temporary);
+        CHECK(grid0_bcat_sync("News") == 0);
+        path = grid0_bcat_path("News", "test");
+        bytes = (char*)snx_read_file(path, &n);
+        CHECK(bytes && n == 4 && !memcmp(bytes, "news", 4));
+        CHECK(grid0_bcat_sync("News") == 0); /* verified cached file */
+        CHECK(!grid0_bcat_path("..", "test") && !grid0_bcat_path("News", "../test"));
+        CHECK(!bcat_hash("bad", 3, "0000000000000000000000000000000000000000000000000000000000000000"));
+        free(bytes);
+        free(path);
+        CHECK(snx_remove_tree(temporary) == 0);
+        free(temporary);
+        g_datadir[0] = 0;
     }
 
     /* a certificate for another host is refused, whatever the CA */

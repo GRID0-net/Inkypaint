@@ -247,6 +247,19 @@ void vk_rec_begin(VkCommandBuffer cb) {
     *(VkCommandBuffer*)rec_push(begin_run, sizeof cb) = cb;
 }
 
+/* MoltenVK frees each command a pool's buffers recorded when it is reset: 6.5% of the GPU thread in a plaza profile
+   (inkypaint, 2026-10-26), where the recording thread, whose buffers they are, had room. The ring runs it before
+   the slot's next begin, and vk_cmd drains the ring before it allocates from the pool on its own thread */
+static void reset_pool_run(const void* p) { VK_OK(vkResetCommandPool(g_vk.dev, *(const VkCommandPool*)p, 0)); }
+void vk_rec_reset_pool(VkCommandPool pool) {
+    pass_flush();
+    if (!rec_enabled()) {
+        reset_pool_run(&pool);
+        return;
+    }
+    *(VkCommandPool*)rec_push(reset_pool_run, sizeof pool) = pool;
+}
+
 typedef struct {
     VkCommandBuffer cb;
     VkSemaphoreSubmitInfo w[2], s[2];
@@ -372,40 +385,65 @@ VkResult vk_rec_present_result(void) {
 /* A graphics pipeline may be a stand-in for one a worker is still making (vk_pipeline_get_deferred): it is waited for
    here, at its bind. One that couldn't be made binds nothing, and the draws after it until the next graphics bind are
    dropped, as the GPU thread drops a draw without its pipeline (the recording thread's own flag: 1). With
-   async_pipelines one still being made isn't waited for: its draws are dropped the same way (2) until a later frame
-   binds it made. A new shader's compile, 60 to 400 ms on one driver, stalled the frame it first appeared in */
-static int g_rec_unbound;
-static u64 g_rec_dropped, g_rec_skipped;
+   async_pipelines one still being made isn't waited for: its draws are dropped the same way (2) until it is ready. Later draws retry that same bind, even when the producer cached its pipeline handle. A new shader's compile, 60 to 400 ms on one driver, stalled the frame it first appeared in */
+static struct {
+    int unbound;
+    VkPipeline pending;
+    u64 dropped, skipped;
+} g_rec_pipeline;
 typedef struct {
     VkCommandBuffer cb;
     VkPipelineBindPoint bp;
     VkPipeline p;
+    int allow_async;
 } BindPipelineArgs;
 static void bind_pipeline_run(const void* p) {
     const BindPipelineArgs* x = p;
     int graphics = x->bp == VK_PIPELINE_BIND_POINT_GRAPHICS, pending = 0;
     VkPipeline pipe =
-        graphics && g_settings.async_pipelines ? vk_pipeline_now(x->p, &pending) : vk_pipeline_resolve(x->p);
-    if (graphics) g_rec_unbound = pipe ? 0 : pending ? 2 : 1;
+        graphics && x->allow_async && g_settings.async_pipelines ? vk_pipeline_now(x->p, &pending)
+                                                                : vk_pipeline_resolve(x->p);
+    if (graphics) {
+        g_rec_pipeline.unbound = pipe ? 0 : pending ? 2 : 1;
+        g_rec_pipeline.pending = pending ? x->p : VK_NULL_HANDLE;
+    }
     if (pipe) vkCmdBindPipeline(x->cb, x->bp, pipe);
 }
-void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p) {
+static void bind_pipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p, int allow_async) {
     if (!rec_on(cb)) {
         VkPipeline pipe = vk_pipeline_resolve(p);
         if (pipe) vkCmdBindPipeline(cb, bp, pipe);
         return;
     }
     BindPipelineArgs* x = rec_push(bind_pipeline_run, sizeof *x);
-    *x = (BindPipelineArgs){cb, bp, p};
+    *x = (BindPipelineArgs){cb, bp, p, allow_async};
     rec_commit();
 }
-static int rec_drop_draw(void) {
-    if (!g_rec_unbound) return 0;
-    if (g_rec_unbound == 2) {
-        if (g_rec_skipped++ % 1000 == 0)
+void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p) {
+    bind_pipeline(cb, bp, p, 1);
+}
+void rec_CmdBindGraphicsPipeline(VkCommandBuffer cb, VkPipeline p, int allow_async) {
+    bind_pipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p, allow_async);
+}
+static int rec_drop_draw(VkCommandBuffer cb) {
+    if (g_rec_pipeline.unbound == 2) {
+        int pending;
+        VkPipeline pipe = vk_pipeline_now(g_rec_pipeline.pending, &pending);
+        if (pipe) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+            g_rec_pipeline.unbound = 0;
+            g_rec_pipeline.pending = VK_NULL_HANDLE;
+        } else if (!pending) {
+            g_rec_pipeline.unbound = 1;
+            g_rec_pipeline.pending = VK_NULL_HANDLE;
+        }
+    }
+    if (!g_rec_pipeline.unbound) return 0;
+    if (g_rec_pipeline.unbound == 2) {
+        if (g_rec_pipeline.skipped++ % 1000 == 0)
             LOG("vulkan: %llu draws skipped while their pipelines were made (async_pipelines)\n",
-                (unsigned long long)g_rec_skipped);
-    } else if (!g_rec_dropped++)
+                (unsigned long long)g_rec_pipeline.skipped);
+    } else if (!g_rec_pipeline.dropped++)
         WARN("vulkan: a pipeline couldn't be made: its draws are dropped\n");
     return 1;
 }
@@ -415,7 +453,7 @@ typedef struct {
 } DrawArgs;
 static void draw_run(const void* p) {
     const DrawArgs* x = p;
-    if (!rec_drop_draw()) vkCmdDraw(x->cb, x->a1, x->a2, x->a3, x->a4);
+    if (!rec_drop_draw(x->cb)) vkCmdDraw(x->cb, x->a1, x->a2, x->a3, x->a4);
 }
 void rec_CmdDraw(VkCommandBuffer cb, u32 vertices, u32 instances, u32 first_vertex, u32 first_instance) {
     if (!rec_on(cb)) {
@@ -434,7 +472,7 @@ typedef struct {
 } DrawIndexedArgs;
 static void draw_indexed_run(const void* p) {
     const DrawIndexedArgs* x = p;
-    if (!rec_drop_draw()) vkCmdDrawIndexed(x->cb, x->a1, x->a2, x->a3, x->a4, x->a5);
+    if (!rec_drop_draw(x->cb)) vkCmdDrawIndexed(x->cb, x->a1, x->a2, x->a3, x->a4, x->a5);
 }
 void rec_CmdDrawIndexed(VkCommandBuffer cb, u32 indices, u32 instances, u32 first_index, i32 vertex_offset,
                         u32 first_instance) {
@@ -1007,6 +1045,7 @@ static u32 g_rset_next;
 typedef struct {
     VkDescriptorPool pool[64];
     int npool, ipool;
+    u32 small;
     struct {
         VkDescriptorSetLayout layout;
         VkDescriptorSet set[REC_SPARE_SETS];
@@ -1056,6 +1095,15 @@ static VkDescriptorSet rec_alloc(RecPools* f, VkDescriptorSetLayout layout) {
 }
 static void frame_reset_run(const void* p) {
     RecPools* f = &g_rpools[*(const u32*)p];
+    /* The producer waited for this frame slot's GPU completion before queuing the reset. Release peak-only pools
+       on this owning thread, in order after the commands that used them. */
+    if (f->npool > f->ipool + 2) {
+        if (++f->small >= 120) {
+            while (f->npool > f->ipool + 2) vkDestroyDescriptorPool(g_vk.dev, f->pool[--f->npool], NULL);
+            f->small = 0;
+        }
+    } else
+        f->small = 0;
     for (int i = 0; i < f->npool; i++) vkResetDescriptorPool(g_vk.dev, f->pool[i], 0);
     f->ipool = 0;
     memset(f->spare, 0, sizeof f->spare);

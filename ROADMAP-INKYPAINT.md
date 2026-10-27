@@ -25,9 +25,10 @@
 
 ## Milestone 3: Windows and Linux
 
-- Upstream's Windows cross build (llvm-mingw) and Linux build, with the same Splatoon-only driver.
-- A small inkypaint launcher in place of ScarletNX's multi-console menu (`src/gui`, which still lists the removed
-  drivers' entries and is not built on macOS yet).
+- Windows x86_64, cross-built from macOS or Linux (`./inkypaint.sh windows`): the runtime and a Qt 6 Quick launcher
+  (`src/launcher-qt`) with the Mac app's panes, packaged as a portable zip and an installer. It builds, but nobody has
+  run it on Windows yet: setting the game up, playing, online play and LAN play all wait for a first test there.
+- Linux: the same Qt launcher, with a package of its own.
 - CI: replace upstream's workflow (it builds the removed drivers) with macOS, Windows and Linux jobs.
 
 ## Milestone 4: online play

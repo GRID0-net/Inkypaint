@@ -44,6 +44,20 @@ int new_event(u32* event, const char* name, int signaled) {
     *event = 0x101;
     return 0;
 }
+static KEvent ntc_events[2];
+static unsigned ntc_event_next;
+KEvent* owned_event(const char* name) {
+    KEvent* e;
+    CHECK(ntc_event_next < 2);
+    e = &ntc_events[ntc_event_next++];
+    e->o.name = name;
+    e->o.refs = 1;
+    return e;
+}
+u32 ev_handle(KEvent* e) { return e == &ntc_events[0] ? 0x102 : 0x103; }
+void kevent_signal(KEvent* e) { e->signaled = 1; }
+void kevent_clear(KEvent* e) { e->signaled = 0; }
+void kobj_unref(KObj* o) { CHECK(o->refs > 0); o->refs--; }
 /* what the dispatchers reach, which the test does not run */
 SvcObj* svcobj_new(const char* name, int (*dispatch)(SvcObj*, IpcCtx*)) {
     SvcObj* o = calloc(1, sizeof *o);
@@ -55,8 +69,34 @@ SvcObj* svcobj_new(const char* name, int (*dispatch)(SvcObj*, IpcCtx*)) {
 }
 #include "svcobj_data.h"
 static void test_free(SvcObj* o) {
+    if (o->destroy) o->destroy(o);
     test_svcobj_data_free(o);
     free(o);
+}
+
+/* Two independent tasks, stable handles before/after completion, cancellation and restart. */
+static void test_ntc(void) {
+    SvcObj *root = new_ntc(), *a, *b;
+    u32 ha, again, hb;
+    i64 now, expected;
+    CHECK(nn_ntc_detail_service_IStaticService_OpenEnsureNetworkClockAvailabilityService(root, 0, 1, &a) == 0);
+    CHECK(nn_ntc_detail_service_IStaticService_OpenEnsureNetworkClockAvailabilityService(root, 0, 1, &b) == 0);
+    CHECK(a && b && a != b);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_GetFinishNotificationEvent(a, &ha) == 0);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_GetFinishNotificationEvent(b, &hb) == 0);
+    CHECK(ha != hb && !ntc_events[0].signaled && !ntc_events[1].signaled);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_StartTask(a) == 0);
+    CHECK(ntc_events[0].signaled && !ntc_events[1].signaled);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_GetFinishNotificationEvent(a, &again) == 0);
+    CHECK(ha == again);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_Cancel(a) == 0 && !ntc_events[0].signaled);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_StartTask(a) == 0 && ntc_events[0].signaled);
+    CHECK(nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_GetServerTime(a, &now) == 0);
+    CHECK(nn_timesrv_detail_service_ISystemClock_GetCurrentTime(NULL, &expected) == 0 && now == expected);
+    test_free(a);
+    test_free(b);
+    test_free(root);
+    CHECK(!ntc_events[0].o.refs && !ntc_events[1].o.refs);
 }
 
 /* time:u, an application's, may write no clock, setting or location, nor may the clocks and time zone service it hands
@@ -248,6 +288,7 @@ int main(void) {
     }
 
     test_permissions();
+    test_ntc();
     free(g_mem);
     printf("time_service: %u checks passed\n", checks);
     return 0;

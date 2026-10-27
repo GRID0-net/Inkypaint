@@ -24,3 +24,6 @@ size_t grid0_id_token(char* out, size_t size) {
     return 0;
 }
 uint64_t grid0_account_id(void) { return 0; }
+
+char* grid0_bcat_path(const char* directory, const char* file) { (void)directory, (void)file; return NULL; }
+int grid0_bcat_sync(const char* directory) { (void)directory; return 0; }

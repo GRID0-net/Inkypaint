@@ -696,6 +696,16 @@ FsTreeResult fs_tree_share(FsTree* tree, FsNode* node, unsigned* shared, unsigne
     return FS_TREE_OK;
 }
 
+FsTreeResult fs_tree_seal(FsTree* tree, FsNode* node) {
+    if (!belongs_to(tree, node)) return FS_TREE_NOTFOUND;
+    node->readonly = 1;
+    for (FsNode* child = node->is_dir ? node->children : NULL; child; child = child->next) {
+        FsTreeResult rc = fs_tree_seal(tree, child);
+        if (rc) return rc;
+    }
+    return FS_TREE_OK;
+}
+
 /* whether name is one of names (NULL-terminated, or NULL for none) */
 static int named(const char* const* names, const char* name) {
     for (size_t i = 0; names && names[i]; i++)
@@ -743,7 +753,7 @@ static FsTreeResult scan_directory(FsTree* tree, FsNode* parent, char* host, uns
             }
             host[parent_len] = '/';
             memcpy(host + parent_len + 1, name, len + 1);
-            int is_dir;
+            int is_dir, linked = 0;
             uint64_t size;
 #if defined(_WIN32)
             if (entry.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE)) {
@@ -753,8 +763,10 @@ static FsTreeResult scan_directory(FsTree* tree, FsNode* parent, char* host, uns
             is_dir = !!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
             size = ((uint64_t)entry.nFileSizeHigh << 32) | entry.nFileSizeLow;
             if (!is_dir) {
-                /* Each indexed file has its own size cache. Reject hardlinks so a write through one pathname
-                   cannot silently change another node's size. This attribute-only check is startup-only. */
+                /* Each indexed file has its own size cache: a hardlinked one is indexed readonly, so no write through
+                   one pathname changes another node's size behind it. A recompile links a game's RomFS into its data
+                   folder where the disk allows, and those files are only read. This attribute-only check is
+                   startup-only. */
                 HANDLE file =
                     CreateFileA(host, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
@@ -765,11 +777,12 @@ static FsTreeResult scan_directory(FsTree* tree, FsNode* parent, char* host, uns
                 BY_HANDLE_FILE_INFORMATION info;
                 if (!GetFileInformationByHandle(file, &info))
                     rc = FS_TREE_IO;
-                else if (info.nNumberOfLinks > 1 ||
-                         (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)))
+                else if (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))
                     rc = FS_TREE_INVALID;
-                else
+                else {
                     size = ((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow;
+                    linked = info.nNumberOfLinks > 1;
+                }
                 if (!CloseHandle(file) && !rc) rc = FS_TREE_IO;
                 if (rc) break;
             }
@@ -779,12 +792,12 @@ static FsTreeResult scan_directory(FsTree* tree, FsNode* parent, char* host, uns
                 rc = FS_TREE_IO;
                 break;
             }
-            if ((!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode)) || st.st_size < 0 ||
-                (S_ISREG(st.st_mode) && st.st_nlink > 1)) {
+            if ((!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode)) || st.st_size < 0) {
                 rc = FS_TREE_INVALID;
                 break;
             }
             is_dir = S_ISDIR(st.st_mode);
+            linked = S_ISREG(st.st_mode) && st.st_nlink > 1; /* readonly, as on Windows */
             size = (uint64_t)st.st_size;
 #endif
             FsNode* n = node_new(name, is_dir);
@@ -793,6 +806,7 @@ static FsTreeResult scan_directory(FsTree* tree, FsNode* parent, char* host, uns
                 break;
             }
             n->size = is_dir ? 0 : size;
+            n->readonly = linked;
             n->parent = parent;
             n->attached = 1;
             n->next = parent->children;

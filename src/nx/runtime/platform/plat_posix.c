@@ -1036,6 +1036,26 @@ void plat_file_unmap(PFileMap* m) {
     else if (m->data && !m->borrowed) munmap((void*)m->data, (size_t)m->size);
     file_map_clear(m);
 }
+int plat_file_write_mapped(const char* path, u64 size, u64 (*fill)(void*, u64, void*), void* arg) {
+    int fd, ok = 0;
+    void* data;
+    u64 used;
+    if (!size || size > SIZE_MAX || size > INT64_MAX) return -1;
+    fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) return -1;
+    if (!ftruncate(fd, (off_t)size)) {
+        data = mmap(NULL, (size_t)size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (data != MAP_FAILED) {
+            used = fill(data, size, arg);
+            ok = used && used <= size && !msync(data, (size_t)used, MS_SYNC);
+            if (munmap(data, (size_t)size)) ok = 0;
+            if (ok && ftruncate(fd, (off_t)used)) ok = 0;
+        }
+    }
+    if (close(fd)) ok = 0;
+    if (!ok) remove(path);
+    return ok ? 0 : -1;
+}
 int plat_replace_file(const char* tmp, const char* dst) {
     if (!rename(tmp, dst)) return 0;
     remove(tmp);

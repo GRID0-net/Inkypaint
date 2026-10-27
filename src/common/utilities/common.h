@@ -60,6 +60,10 @@ int snx_copy_file(const char* src, const char* dst);
 /* size bytes of src from offset into a new dst, in pieces: never the whole range in memory */
 int snx_copy_file_range(const char* src, SnxU64 offset, SnxU64 size, const char* dst);
 int snx_copy_tree(const char* src, const char* dst);
+/* snx_copy_tree with each file a hard link to the source's where the file system can make one (the same volume), a copy
+   where not: for files neither side writes, as the copy of a game's RomFS beside its recompiled code, which took
+   minutes and a second copy of gigabytes */
+int snx_link_tree(const char* src, const char* dst);
 /* dst a second name of the file src, on the same disk: nonzero when dst is there already, or the disk or system takes
    none (another volume, FAT), for the caller to copy instead */
 int snx_link_file(const char* src, const char* dst);

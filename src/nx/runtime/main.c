@@ -4,6 +4,10 @@
    order they depend on each other, the shaders made before the game draws (prepare_wait), the game's main thread;
    then the frontend's loop at the display's rate until the run ends, saving what outlives it */
 #include "nx/runtime/main.h"
+#include "nx/runtime/maintenance.h"
+#include "nx/runtime/inkypaint_display.h"
+#include "nx/runtime/inkypaint_framerate.h"
+#include "nx/runtime/inkypaint_calltrace.h"
 #include "common/cpu/recompiler/llvm/gdb_jit.h"
 #include "common/cpu/recompiler/llvm/ir.h"
 #include "common/utilities/build_info.h"
@@ -465,6 +469,7 @@ void snx_save_before_exit(void) {
     static int saved;
     pm_lock(&lock);
     if (!saved) {
+        maintenance_stop();
         save_hints();
         if (g_renderer && g_renderer->save) g_renderer->save(1);
         svc_core_exit();
@@ -505,18 +510,29 @@ static void report_lock_waits(void) {
              w[i].cond ? "waits on a condition with" : "waits for", (long long)((intptr_t)w[i].m - (intptr_t)pm_wait_base()),
              (long long)((intptr_t)w[i].at - (intptr_t)pm_lock));
 }
+static u64 frontend_phase(const char* name, u64 began) {
+    u64 now = plat_ns();
+    if (now - began >= 250000000ull)
+        WARN("input: frontend %s blocked polling for %llu ms\n", name,
+             (unsigned long long)((now - began) / 1000000ull));
+    return now;
+}
 static void frontend_loop(void) {
     const u64 period = 1000000000u / VI_REFRESH_HZ;
     u64 tick = 0, next = plat_ns(), now, changed = next, rate_at = next;
     int frames = 0, stalls = 0, rate_frames = 0;
     while (!g_quit) {
         int shown;
+        u64 phase = plat_ns();
         SNX_ZONE(z_frontend, "frontend tick");
         video_poll();
+        phase = frontend_phase("SDL events/controllers", phase);
         hid_update();
         vi_vsync_tick();
+        phase = frontend_phase("HID/vsync publication", phase);
         if (++tick % 60 == 0) ini_poll(0);
         frontend_frame();
+        phase = frontend_phase("settings/overlay/capture", phase);
         SNX_ZONE_END(z_frontend);
 #if defined(SNX_TRACY)
         SNX_PLOT("guest memory", used_memory());
@@ -537,11 +553,9 @@ static void frontend_loop(void) {
         }
 #endif
         /* here and not on the GPU thread, where writing the pipeline cache would hold up every channel */
-        if (tick % 300 == 0) {
-            save_hints();
-            if (g_renderer->save) g_renderer->save(0);
-        }
+        if (tick % 300 == 0) maintenance_request();
         if (tick % 900 == 0) write_threads(tick / VI_REFRESH_HZ);
+        frontend_phase("maintenance/thread diagnostics", phase);
         now = plat_ns();
         shown = __atomic_load_n(&g_frames, __ATOMIC_RELAXED);
         /* the pace the game is shown at, in the log every five seconds: a phone has no overlay to read it from */
@@ -873,7 +887,9 @@ int snx_main(int argc, char** argv) {
     }
     /* after the header, so the client's own lines do not come before it and a capture that cannot start still leaves
        a log: it is asked for by a setting, and a run without it is better than no run */
+    LOG("startup: initializing tracing\n");
     if (snx_tracy_init(title)) WARN("tracy: no capture this run; it goes on without one\n");
+    LOG("startup: checking game layout\n");
     say_old_layout();
     /* before the JIT's first load (jit_init, arm.c's blocks, the GPU's macros), and only when asked: GDB stops the
        game to read each one */
@@ -883,6 +899,7 @@ int snx_main(int argc, char** argv) {
             "attached\n");
     }
     if (g_addon) LOG("game: the update of the game in %s, with its settings and saves\n", base);
+    LOG("startup: configuring LLVM\n");
     snx_ir_slp_vectorizer(g_settings.slp_vectorizer); /* before the JIT's first compile too */
 
     fs_init(keys, title_keys); /* the npdm is read through it, and mem_init's layout comes before */
@@ -892,17 +909,23 @@ int snx_main(int argc, char** argv) {
 #ifdef MODULE_PACK
     g_settings.log_level = 2; /* a phone's log is the only way to see what a run did: everything, until it is steadier */
 #endif
+    LOG("startup: reserving guest memory\n");
     mem_init();
     kernel_init();
     dispatch_init();
     if (g_arm_mod) arm_dispatch_init();
+    LOG("startup: loading runtime hints\n");
     load_hints();
+    LOG("startup: loading game executables\n");
     if (loader_load()) fatal("Could not load the game executables. See the .log for details.");
     kernel_load_symbols();
     nvn_trace_init();
     /* after the trace, which says whether calls must go through the slots it wraps. The JIT compiles A64: a 32-bit
        game's blocks are arm.c's, and its hints are A32 block keys the JIT must not warm-compile */
     if (!g_arm_mod) jit_init();
+    inkypaint_display_init();
+    inkypaint_framerate_init();
+    inkypaint_calltrace_init(); /* last: it wraps every slot, the hooks above too */
     read_npdm();
     svc_core_init();
     {

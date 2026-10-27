@@ -116,6 +116,17 @@ function(snx_test_target target standard)
 endfunction()
 
 
+add_executable(snx-test-inkypaint-camera-math inkypaint_camera_math.c)
+snx_test_target(snx-test-inkypaint-camera-math 99)
+if(NOT WIN32)
+    target_link_libraries(snx-test-inkypaint-camera-math PRIVATE m)
+endif()
+add_test(NAME inkypaint_camera_math COMMAND snx-test-inkypaint-camera-math)
+
+add_executable(snx-test-inkypaint-frame-clock inkypaint_frame_clock.c)
+snx_test_target(snx-test-inkypaint-frame-clock 99)
+add_test(NAME inkypaint_frame_clock COMMAND snx-test-inkypaint-frame-clock)
+
 add_executable(snx-test-arm-profile arm_profile.c "${PROJECT_SOURCE_DIR}/src/common/cpu/arm/a32.c"
     "${PROJECT_SOURCE_DIR}/src/common/cpu/arm/thumb_decode.c"
     "${PROJECT_SOURCE_DIR}/src/common/cpu/arm/vector_decode.c"
@@ -443,13 +454,16 @@ endif()
 # mm:u and the smaller services, hid's IHidServer and acc (misc.c, hid.c, acc.c, whose user picture snx_splash draws),
 # with the kernel objects stubbed
 if(TARGET OpenSSL::Crypto AND NOT SNX_TOOLS_ONLY)
-    # GRID0+ (grid0.c) and the friend service on it (friends.c), against a TLS server in the test on the loopback
-    add_executable(snx-test-grid0-service grid0_service.c own_stub.c)
-    snx_test_target(snx-test-grid0-service 23)
-    snx_service_swipc(snx-test-grid0-service hle/services/network/friends.swipc)
-    target_link_libraries(snx-test-grid0-service PRIVATE scarletnx-ldn OpenSSL::SSL hactool_lib scarletnx-common)
-    add_test(NAME grid0_service COMMAND snx-test-grid0-service)
-    set_tests_properties(grid0_service PROPERTIES TIMEOUT 60)
+    # GRID0+ (grid0.c) and the friend service on it (friends.c), against a TLS server in the test on the loopback. Its
+    # locks and threads are POSIX's (the test stands in for the platform layer)
+    if(NOT WIN32)
+        add_executable(snx-test-grid0-service grid0_service.c own_stub.c)
+        snx_test_target(snx-test-grid0-service 23)
+        snx_service_swipc(snx-test-grid0-service hle/services/network/friends.swipc)
+        target_link_libraries(snx-test-grid0-service PRIVATE scarletnx-ldn OpenSSL::SSL hactool_lib scarletnx-common)
+        add_test(NAME grid0_service COMMAND snx-test-grid0-service)
+        set_tests_properties(grid0_service PROPERTIES TIMEOUT 60)
+    endif()
 
     add_executable(snx-test-misc-service misc_service.c grid0_off.c "${PROJECT_SOURCE_DIR}/src/nx/hle/services/hid_touch.c"
         "${PROJECT_SOURCE_DIR}/src/nx/hle/services/hid_motion.c")

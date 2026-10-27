@@ -98,6 +98,8 @@ u64 plat_file_size(const char* path) {
     test_fail("HLE attempted host size query", __LINE__);
     return 0;
 }
+/* fs.c times its host opens, to say one the host held up: a clock that never moves */
+u64 plat_ns(void) { return 0; }
 i64 plat_pread(FILE* f, void* buf, u64 size, u64 off) {
 #if defined(_WIN32)
     if (_fseeki64(f, (i64)off, SEEK_SET)) return -1;
@@ -1026,19 +1028,30 @@ static void test_extracted_romfs(SvcObj* proxy) {
     const u8 spanning[13] = {'e', 's', 't', 0, 0, 0, 0, 0, 0, 't', 'a', 'i', 'l'};
     CHECK(!memcmp(GP(0x5000), spanning, sizeof spanning));
     svcobj_unref(storage);
-    /* RomFS files are mapped from startup and readonly; zulu.bin was refused and is read on demand */
+    /* RomFS files are mapped from startup and readonly; zulu.bin was refused and is read on demand. On Windows every
+       RomFS file is read on demand (fs_init: no file opened at startup), readonly all the same */
     FsNode *asset, *zulu;
     pm_lock(&g_hle.fs.tree.lock);
+#if defined(_WIN32)
+    CHECK(!fs_tree_lookup(&g_hle.fs.tree, NULL, "romfs/asset.bin", &asset) && asset->fd < 0 && asset->readonly);
+#else
     CHECK(!fs_tree_lookup(&g_hle.fs.tree, NULL, "romfs/asset.bin", &asset) && asset->fd >= 0 && asset->readonly);
+#endif
     CHECK(!fs_tree_lookup(&g_hle.fs.tree, NULL, "romfs/zulu.bin", &zulu) && zulu->fd < 0 && zulu->readonly);
     CHECK(fs_tree_remove(&g_hle.fs.tree, NULL, "romfs/asset.bin", 0, 0, 0) == FS_TREE_READONLY);
     CHECK(fs_tree_rename(&g_hle.fs.tree, NULL, "romfs/asset.bin", "romfs/moved.bin", 0) == FS_TREE_READONLY);
     CHECK(fs_tree_create(&g_hle.fs.tree, NULL, "romfs/new.bin", 0, 0, NULL) == FS_TREE_READONLY);
     pm_unlock(&g_hle.fs.tree.lock);
     PFileMap map;
+#if defined(_WIN32)
+    CHECK(!fs_map_file("romfs/asset.bin", &map) && !map.borrowed && map.size == 10 && !memcmp(map.data, "romfs test", 10));
+    plat_file_unmap(&map);
+    CHECK(!map.data && !map.borrowed && asset->map == NULL);
+#else
     CHECK(!fs_map_file("romfs/asset.bin", &map) && map.borrowed && map.data == asset->map && map.size == 10);
     plat_file_unmap(&map);
     CHECK(!map.data && !map.borrowed && asset->map != NULL);
+#endif
     u64 size = 0;
     u8* bytes = fs_read_file("romfs/asset.bin", &size);
     CHECK(bytes != NULL && size == 10 && !memcmp(bytes, "romfs test", 10));

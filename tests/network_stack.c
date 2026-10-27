@@ -140,6 +140,36 @@ static void udp(void) {
     snx_socket_unref(b);
 }
 
+static void pause_ms(unsigned ms) {
+#ifdef _WIN32
+    Sleep(ms);
+#else
+    usleep(ms * 1000u);
+#endif
+}
+
+/* a datagram to a port nobody listens on: the ICMP "port unreachable" that comes back fails no later receive, and the
+   socket goes on working (Windows failed the next receive with WSAECONNRESET unless told not to) */
+static void udp_unreachable(void) {
+    SnxSocket *a, *b, *gone;
+    SnxSockAddr la = loopback(), lg = loopback(), from;
+    char buf[8];
+    CHECK(!snx_socket_open(&a, SNX_AF_INET, SNX_SOCK_DGRAM, SNX_IPPROTO_UDP));
+    CHECK(!snx_socket_open(&b, SNX_AF_INET, SNX_SOCK_DGRAM, SNX_IPPROTO_UDP));
+    CHECK(!snx_socket_open(&gone, SNX_AF_INET, SNX_SOCK_DGRAM, SNX_IPPROTO_UDP));
+    CHECK(!snx_socket_bind(a, &la) && !snx_socket_name(a, &la));
+    CHECK(!snx_socket_bind(gone, &lg) && !snx_socket_name(gone, &lg));
+    snx_socket_unref(gone); /* its port closed */
+    CHECK(snx_socket_send(a, "nobody", 6, 0, &lg) == 6);
+    pause_ms(100); /* the ICMP answer is back */
+    CHECK(snx_socket_recv(a, buf, sizeof buf, SNX_MSG_DONTWAIT, &from, NULL) == -SNX_EAGAIN);
+    CHECK(snx_socket_send(b, "still", 5, 0, &la) == 5);
+    pause_ms(20);
+    CHECK(snx_socket_recv(a, buf, sizeof buf, SNX_MSG_DONTWAIT, &from, NULL) == 5 && !memcmp(buf, "still", 5));
+    snx_socket_unref(a);
+    snx_socket_unref(b);
+}
+
 static void pair_and_event(void) {
     SnxSocket* p[2];
     CHECK(!snx_socket_pair(p, SNX_AF_UNIX, SNX_SOCK_STREAM, 0));
@@ -268,6 +298,20 @@ static void names(void) {
     SnxNetInterface i[8];
     int n = snx_net_interfaces(i, 8);
     CHECK(n >= 0 && n <= 8);
+    /* lan_adapter's lookup: each listed adapter by its name, its address and a part of its name */
+    for (int k = 0; k < n; k++) {
+        SnxNetInterface f;
+        char ip[16];
+        snprintf(ip, sizeof ip, "%u.%u.%u.%u", i[k].ip[0], i[k].ip[1], i[k].ip[2], i[k].ip[3]);
+        CHECK(!snx_net_find_interface(i[k].name, &f) && !strcmp(f.name, i[k].name));
+        CHECK(!snx_net_find_interface(ip, &f) && !memcmp(f.ip, i[k].ip, 4));
+        if (strlen(i[k].name) > 2) CHECK(!snx_net_find_interface(i[k].name + 1, &f));
+    }
+    SnxNetInterface none;
+    CHECK(snx_net_find_interface("no-such-adapter-here", &none) == -SNX_ENETDOWN);
+    CHECK(snx_net_find_interface("203.0.113.254", &none) == -SNX_ENETDOWN);
+    SnxNetInterface zt = {.name = "feth2190"}, win = {.name = "ZeroTier One [8056c2e21c000001]"}, wifi = {.name = "en0"};
+    CHECK(snx_net_virtual_lan(&zt) && snx_net_virtual_lan(&win) && !snx_net_virtual_lan(&wifi));
 }
 
 int main(void) {
@@ -275,6 +319,7 @@ int main(void) {
     CHECK(!snx_net_init());
     tcp();
     udp();
+    udp_unreachable();
     pair_and_event();
     cancel();
     icmp();

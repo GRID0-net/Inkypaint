@@ -10,6 +10,8 @@
 #include <stdio.h>
 
 int g_opt_fps = SNX_FPS_GAME;
+/* the frame-rate experiment (inkypaint_framerate.c) is off here: the game's own pace */
+int inkypaint_framerate_target(void) { return 0; }
 static u64 now_ns, slept_ns;
 static unsigned checks, failures;
 #define CHECK(c, ...)                                                                                                  \

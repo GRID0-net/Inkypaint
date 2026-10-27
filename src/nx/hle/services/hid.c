@@ -689,10 +689,22 @@ static int nn_hid_IHidServer_GetVibrationDeviceInfo(SvcObj* self, nn_hid_Vibrati
     info->position = 1 + (handle >> 16 & 1);
     R_SUCCEED();
 }
-static u32 hid_amplitude(float a) {
+static u64 hid_amplitude(float a) {
     if (!(a > 0.0f)) return 0; /* a NaN too */
     if (a >= 1.0f) return 65535;
-    return (u32)(a * 65535.0f);
+    return (u64)(a * 65535.0f);
+}
+/* A pad's motors have no frequency to play: a band's amplitude is softened as its frequency rises above where the
+   motor's buzz is felt, down to 30%, as Eden's SDL driver does (sdl_driver.cpp's RumblePlay, GPL-3.0-or-later). The
+   softening, 0 to 65535, for PadState.rumble */
+static u64 hid_frequency_softening(float frequency, float start, float width) {
+    float scale = 1.0f;
+    if (frequency > start) {
+        scale = 1.0f - (frequency - start) / width;
+        if (scale < 0.3f) scale = 0.3f;
+    }
+    if (!(scale < 1.0f)) return 0;
+    return (u64)((1.0f - scale) * 65535.0f);
 }
 /* what the frontend plays for the motor behind the handle (hid.h's PadState.rumble). Under the lock */
 static void hid_vibrate(u32 handle, const nn_hid_VibrationValue* v) {
@@ -704,7 +716,10 @@ static void hid_vibrate(u32 handle, const nn_hid_VibrationValue* v) {
     g_hle.hid.vibration[p][motor].amp_high = v->amp_high;
     g_hle.hid.vibration[p][motor].freq_high = v->freq_high;
     __atomic_store_n(&(p ? &g_hle.hid.pad_extra[p - 1] : &g_hle.hid.pad1)->rumble[motor],
-                     hid_amplitude(v->amp_low) | hid_amplitude(v->amp_high) << 16, __ATOMIC_RELAXED);
+                     hid_amplitude(v->amp_low) | hid_amplitude(v->amp_high) << 16 |
+                         hid_frequency_softening(v->freq_low, 140.0f, 400.0f) << 32 |
+                         hid_frequency_softening(v->freq_high, 200.0f, 700.0f) << 48,
+                     __ATOMIC_RELAXED);
 }
 static int nn_hid_IHidServer_SendVibrationValue(SvcObj* self, nn_hid_VibrationDeviceHandle handle,
                                                 const nn_hid_VibrationValue* value, u64 aruid) {

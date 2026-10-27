@@ -98,3 +98,19 @@ interface nn::timesrv::detail::service::IStaticService is time:a, time:s {
     [501] CalculateSpanBetween(buffer<nn::time::sf::ClockSnapshot, 0x19> a,
                                buffer<nn::time::sf::ClockSnapshot, 0x19> b) -> nn::TimeSpanType span;
 }
+
+# Network time correction. The host-backed network clock is already available (time.c).
+interface nn::ntc::detail::service::IEnsureNetworkClockAvailabilityService {
+    [0] StartTask();
+    [1] GetFinishNotificationEvent() -> handle<copy, event> event;
+    @stub [2] GetResult();
+    [3] Cancel();
+    @stub [4] IsProcessing() -> b8 processing;
+    [5] GetServerTime() -> nn::time::PosixTime time;
+}
+interface nn::ntc::detail::service::IStaticService is ntc {
+    [0] OpenEnsureNetworkClockAvailabilityService(u32 mode, u32 priority)
+        -> object<nn::ntc::detail::service::IEnsureNetworkClockAvailabilityService> service;
+    @stub [100] SuspendAutonomicTimeCorrection();
+    @stub [101] ResumeAutonomicTimeCorrection();
+}

@@ -18,6 +18,10 @@
 #include <string.h>
 #ifdef _WIN32
 #include <mstcpip.h>
+#include <mswsock.h>
+#ifndef SIO_UDP_NETRESET
+#define SIO_UDP_NETRESET _WSAIOW(IOC_VENDOR, 15)
+#endif
 #else
 #include <errno.h>
 #include <fcntl.h>
@@ -146,6 +150,17 @@ int snx_net_close_fd(SnxHostFd fd) { return closesocket(fd) ? snx_net_host_error
 int snx_net_set_host_nonblocking(SnxHostFd fd) {
     u_long on = 1;
     return ioctlsocket(fd, FIONBIO, &on) ? snx_net_host_error() : 0;
+}
+/* Windows answers an ICMP "port unreachable" (or "TTL exceeded") that comes back for a datagram the socket sent by
+   failing the socket's next receive with WSAECONNRESET (WSAENETRESET), where other hosts say nothing on an unconnected
+   UDP socket. Peer-to-peer play sends to peers whose NAT has no mapping open yet, which answers so: the game was told
+   its socket was reset, and matchmaking and private battles failed on Windows only while the lobby (TCP) worked. Off,
+   as Eden and Dolphin turn it off; a failure leaves the socket as it was */
+static void host_udp_no_reset(SnxHostFd fd) {
+    BOOL off = FALSE;
+    DWORD got = 0;
+    WSAIoctl(fd, SIO_UDP_CONNRESET, &off, sizeof off, NULL, 0, &got, NULL, NULL);
+    WSAIoctl(fd, SIO_UDP_NETRESET, &off, sizeof off, NULL, 0, &got, NULL, NULL);
 }
 /* a UDP pair on loopback: WSAPoll only polls sockets */
 int snx_notifier_open(SnxHostFd out[2]) {
@@ -621,6 +636,11 @@ static int64_t host_send(SnxSocket* s, const void* data, size_t size, int flags,
             continue;
         }
         int e = host_send_error();
+        if (e != -SNX_EAGAIN && s->type == SNX_SOCK_DGRAM) {
+            static int said;
+            if (said < 8 && __atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
+                snx_net_warn("net: a datagram send failed (error %d), the game is told\n", -e);
+        }
         if (e != -SNX_EAGAIN || dontwait) return total ? total : e;
         e = snx_net_wait_until(s->fd, POLLOUT, deadline);
         if (e < 0) return total ? total : e;
@@ -636,6 +656,10 @@ static int64_t host_recv_once(SnxSocket* s, char* p, size_t size, int hflags, Sn
         if (out_flags) *out_flags |= SNX_MSG_TRUNC; /* Winsock fails a datagram that doesn't fit, POSIX cuts it */
         r = (int)size;
     }
+    /* an ICMP answer to an earlier send, where host_udp_no_reset couldn't turn them off: no datagram, as elsewhere */
+    if (r < 0 && s->type == SNX_SOCK_DGRAM &&
+        (WSAGetLastError() == WSAECONNRESET || WSAGetLastError() == WSAENETRESET))
+        return -SNX_EAGAIN;
 #else
     struct iovec iov = {p, size};
     struct msghdr m;
@@ -665,6 +689,11 @@ static int64_t host_recv(SnxSocket* s, void* data, size_t size, int flags, SnxSo
             total += r;
             if (!waitall || !r || (size_t)total >= size) return total;
             continue;
+        }
+        if (r != -SNX_EAGAIN && s->type == SNX_SOCK_DGRAM) {
+            static int said;
+            if (said < 8 && __atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
+                snx_net_warn("net: a datagram receive failed (error %d), the game is told\n", (int)-r);
         }
         if (r != -SNX_EAGAIN || dontwait) return total ? total : r;
         r = snx_net_wait_until(s->fd, POLLIN, deadline);
@@ -914,6 +943,9 @@ static int open_host(SnxSocket** out, int domain, int type, int protocol) {
     SnxHostFd fd = socket(hd, ht, protocol);
     if (fd == SNX_BADFD) return snx_net_host_error();
     prepare_host_fd(fd);
+#ifdef _WIN32
+    if (type == SNX_SOCK_DGRAM) host_udp_no_reset(fd);
+#endif
     *out = snx_net_socket_new(&g_host_ops, fd, domain, type, protocol);
     if (!*out) {
         snx_net_close_fd(fd);

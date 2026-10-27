@@ -407,8 +407,10 @@ static int dump_has_exefs(const char* path) { return g_hle.fs.dfs && !strncmp(pa
 
 void fs_init(const char* keys, const char* title_keys) {
     static const char* const apart[] = {"mods", NULL}; /* mods_open's */
+    LOG("startup: indexing game files\n");
     FsTreeResult r = fs_tree_init_skipping(&g_hle.fs.tree, g_datadir, apart);
     if (r != FS_TREE_OK) fatal("Could not index game filesystem %s (error %d)", g_datadir, r);
+    LOG("startup: game files indexed\n");
     size_t n = strlen(g_hle.fs.tree.base);
     if (n + 2 > sizeof g_datadir) fatal("Game filesystem path is too long");
     memcpy(g_datadir, g_hle.fs.tree.base, n);
@@ -422,17 +424,36 @@ void fs_init(const char* keys, const char* title_keys) {
     pm_lock(&g_hle.fs.tree.lock);
     /* the console empties the application's temporary storage when the application is launched, and a game finds it
        empty at first use */
+    LOG("startup: clearing temporary game storage\n");
     r = fs_tree_remove(&g_hle.fs.tree, NULL, "save/temp", 1, 1, 0);
     if (r != FS_TREE_OK && r != FS_TREE_NOTFOUND) WARN("fs: could not empty save/temp (error %d)\n", r);
+    LOG("startup: opening content overlays\n");
     overlays();
+    LOG("startup: opening game dump\n");
     dump_open(keys, title_keys);
+    LOG("startup: opening DLC\n");
     dlcs_open(keys, title_keys);
+    LOG("startup: resolving RomFS\n");
     if (!g_hle.fs.dfs) romfs_from_tmpfs();
+    LOG("startup: opening mods\n");
     mods_open();
     for (size_t i = 0; i < sizeof shared_paths / sizeof shared_paths[0]; i++) {
         FsNode* node;
         if (g_hle.fs.dump.patch.found) break; /* an update's, read over the game's dump: the game's files unread */
         if (fs_tree_lookup(&g_hle.fs.tree, NULL, shared_paths[i], &node)) continue;
+#if defined(_WIN32)
+        /* Windows: a RomFS folder's files are opened when the game reads them, not all here. Opening a game's tens of
+           thousands at startup (9.4 GB in one) left runs on two PCs in the background with no window, their logs
+           ending at this step: on Windows an open can wait for the antivirus to scan the file, outside this process,
+           so every file the game has was scanned before its first frame. ExeFS and a RomFS image are a few files */
+        if (node->is_dir && !strcmp(shared_paths[i], "romfs")) {
+            LOG("startup: %s files read when the game asks for them\n", shared_paths[i]);
+            r = fs_tree_seal(&g_hle.fs.tree, node);
+            if (r != FS_TREE_OK) fatal("Could not index %s%s (error %d)", g_datadir, shared_paths[i], r);
+            continue;
+        }
+#endif
+        LOG("startup: mapping %s files\n", shared_paths[i]);
         r = fs_tree_share(&g_hle.fs.tree, node, &shared, &failed);
         if (r != FS_TREE_OK) fatal("Could not map %s%s (error %d)", g_datadir, shared_paths[i], r);
     }
@@ -446,7 +467,14 @@ static int node_in_memory(const FsNode* node) { return node->is_virtual || node-
 static const u8* node_memory(const FsNode* node) { return node->is_virtual ? node->virtual_data : node->map; }
 
 /* Callers hold tree.lock: content I/O is permitted only after resolving an indexed node. */
-static FILE* node_open(FsNode* node, const char* mode) { return fs_tree_open(&g_hle.fs.tree, node, mode); }
+static FILE* node_open(FsNode* node, const char* mode) {
+    u64 start = plat_ns();
+    FILE* f = fs_tree_open(&g_hle.fs.tree, node, mode);
+    u64 ms = (plat_ns() - start) / 1000000u;
+    /* an open the host held up (an antivirus scanning the file first, a disk waking): said, as it stalls the game */
+    if (ms >= 1000) LOG_LIMIT(32, "fs: opening %s took %llu ms\n", node->name, (unsigned long long)ms);
+    return f;
+}
 
 FILE* fs_open_read(const char* path, u64* size) {
     FsNode* node;

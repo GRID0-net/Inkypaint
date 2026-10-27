@@ -148,6 +148,9 @@ int plat_file_map(PFileMap* m, const char* path);
 /* the same for a file whose length is already known from an index: size is trusted, the host isn't asked */
 int plat_file_map_sized(PFileMap* m, const char* path, u64 size);
 void plat_file_unmap(PFileMap* m);
+/* Fill a new file directly through a shared writable mapping, without a file-sized heap copy. fill returns the
+   number of bytes to keep (1..size), or 0 on failure. Failed/partial files are removed. 0 on success, -1 otherwise. */
+int plat_file_write_mapped(const char* path, u64 size, u64 (*fill)(void* data, u64 size, void* arg), void* arg);
 /* Moves tmp over dst atomically, so dst is always either the old or the new file. On failure dst is untouched and
    tmp deleted: 0, or -1 */
 int plat_replace_file(const char* tmp, const char* dst);

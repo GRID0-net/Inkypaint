@@ -42,6 +42,7 @@ SvcObj* new_setsys(void);
 /* ---- time.c */
 void time_init(void);
 SvcObj* new_time(void);      /* time:a and time:s */
+SvcObj* new_ntc(void);
 SvcObj* new_time_user(void); /* time:u, an application's: no write */
 
 /* ---- acc.c */
@@ -344,6 +345,14 @@ typedef struct {
     KEvent* availability;
 } NfcUser;
 typedef struct {
+    u32 obj;
+    char directory[32], file[32];
+} BcatFile;
+#define BCAT_FILES 64
+
+typedef struct {
+    BcatFile bcat_files[BCAT_FILES];
+    u32 bcat_file_next;
     u32 apm_config[APM_MODES]; /* each mode's configuration, as a session or SetCpuBoostMode last set it */
     PMutex mm_lock;
     Mm mms[MM_SESSIONS];
@@ -396,6 +405,7 @@ typedef struct {
 typedef struct {
     u32 obj;
     int read_only;
+    KEvent* finished; /* ntc tasks own their completion event */
 } TimeObj;
 typedef struct {
     KShmem* shm;

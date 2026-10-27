@@ -153,6 +153,12 @@ typedef struct SnxNetInterface {
 int snx_net_interfaces(SnxNetInterface* out, int max);
 /* 0 and *out when the host has a connection, -SNX_ENETDOWN when it has none */
 int snx_net_primary_interface(SnxNetInterface* out);
+/* 1 for an interface of a virtual LAN that carries broadcasts between its members, by its name: ZeroTier's (zt* on
+   Linux, feth* on macOS, "ZeroTier One [network]" on Windows), Hamachi's and Radmin VPN's */
+int snx_net_virtual_lan(const SnxNetInterface* i);
+/* the interface spec names: its name (any case), a part of its name (Windows' long ones), or its IPv4 address;
+   "virtual" the first virtual LAN's. 0 and *out, or -SNX_ENETDOWN when none is up */
+int snx_net_find_interface(const char* spec, SnxNetInterface* out);
 /* The host's DNS servers. IPv4 ones in ipv4 (up to max), the count returned. nameservers_text, when not NULL, gets
    resolv.conf lines for every server including IPv6 ones, and the host's search and options lines (the GNU ABI's
    /etc/resolv.conf) */

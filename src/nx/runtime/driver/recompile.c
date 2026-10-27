@@ -40,7 +40,7 @@ static void usage(void) {
     puts("  --jit-cache FILE       Link a profile run's .jitcache into the module as runtime code\n"
          "  --keys FILE            prod.keys for a dump (default: the data folder, then ~/.switch)\n"
          "  --title-keys FILE      title.keys for a dump, found the same way (optional)");
-    puts("  --KEY=VALUE            A recompile setting: opt, aot_threads, unit_cache_gb, llvm_pass_<pass>=0\n"
+    puts("  --KEY=VALUE            A recompile setting: opt, aot_threads, fast_pipeline, big_function, unit_cache_gb, llvm_pass_<pass>=0\n"
          "                         (scarletnx --settings=recompile lists them)");
     printf("  --chunk N              Instructions per code unit, whole functions batched (default: %d)\n",
            SNX_CHUNK_INSTRUCTIONS);
@@ -312,10 +312,10 @@ static int copy_data(const SnxProgram* p, const char* dir, int quiet, int tmpfs)
             if (!snx_is_dir(dst)) {
                 /* A stopped copy must not look like a complete cache on the next run. */
                 char* pending = snx_format("%s.copying", dst);
-                if (!quiet) puts("Copying RomFS...");
+                if (!quiet) puts("Copying RomFS (linked where the disk allows)...");
                 rc = ((snx_is_dir(pending) || snx_is_file(pending) || snx_is_link(pending)) &&
                       snx_remove_tree(pending)) ||
-                     snx_copy_tree(p->romfs_path, pending) || snx_replace(pending, dst);
+                     snx_link_tree(p->romfs_path, pending) || snx_replace(pending, dst);
                 free(pending);
             }
             free(dst);
@@ -482,6 +482,7 @@ int snx_recompile_game(int argc, char** argv, const SnxPaths* paths) {
         return snx_error("opt = %s: not 0, 1, 2, 3, s or z", g_settings.optimization_level);
     compile.opt = g_settings.optimization_level;
     compile.jobs = g_settings.aot_threads > 0 ? (unsigned)g_settings.aot_threads : snx_cpu_count();
+    gen.big_function = (size_t)g_settings.big_function_size;
     if (!strcmp(target, "win64"))
         compile.target_win = 1;
     else if (!strcmp(target, "linux"))

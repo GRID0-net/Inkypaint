@@ -8,7 +8,8 @@
 #include "nx/hle/services/hid_touch.h" /* TouchState, HidFingers */
 #include "nx/runtime/platform/plat.h"  /* PMutex */
 
-/* One motion sensor, in the Switch controller's frame: acceleration in g, angular velocity in rad/s */
+/* One motion sensor, in the Switch controller's frame: acceleration in g, angular velocity in revolutions a second
+   (a turn is 1.0), the units the console's HID reports */
 typedef struct {
     float acceleration[3];
     float angular_velocity[3];
@@ -25,9 +26,10 @@ typedef struct {
     PadKind kind;
     u32 source_id;       /* the SDL instance id, which changes when the controller is replaced */
     PadMotion motion[2]; /* the left (or only) sensor, and the right one when there is one */
-    /* vibration the game asked for, left and right: amp_low in bits 0-15, amp_high in bits 16-31. Game threads write
-       it and the frontend plays it */
-    u32 rumble[2];
+    /* vibration the game asked for, left and right: amp_low in bits 0-15, amp_high in bits 16-31, and how much each
+       band's frequency softens it in bits 32-47 and 48-63 (0: not at all, 65535: entirely). Game threads write it
+       and the frontend plays it */
+    u64 rumble[2];
 } PadState;
 
 void hid_update(void); /* the next samples in shared memory, touch screen included */
@@ -37,11 +39,14 @@ int hid_connected_players(u32* first_id);
 #define HID_PADS    8  /* the frontend's players */
 #define HID_ENTRIES 10 /* No1 to No8, Handheld, Other: the shared memory's Npads */
 
-/* a motion sensor's orientation, which hid_motion_sample integrates from one sample to the next */
+/* a motion sensor's state between samples (hid_motion.c, Eden's MotionInput): all zero is a sensor not yet sampled */
 typedef struct {
-    float quaternion[4]; /* scalar, x, y, z; zero state means identity */
-    float angle[3];
-    int was_valid;
+    float quat[4];       /* the orientation: x, y, z, w, in MotionInput's frame */
+    float rotations[3];  /* revolutions turned about each axis since the start: the state's angle */
+    float gyro_bias[3];  /* what the sensor reads at rest, learned while it rests and taken off every reading */
+    float real_error[3], integral_error[3], derivative_error[3]; /* the gravity correction's terms */
+    u32 reset_counter;   /* samples resting flat in a row, toward a fresh orientation from gravity */
+    int started, only_accelerometer;
 } HidMotionState;
 /* a vibration value as the game sent it (nn::hid::VibrationValue, laid out as hid.swipc's) */
 typedef struct {

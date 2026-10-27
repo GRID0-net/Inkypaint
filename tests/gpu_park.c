@@ -435,11 +435,22 @@ int main(void) {
     forget_marks();
     u64 e = mark(0xE1);
     submit_wait(&e, 1, 23, 30, 1);
+    cpu_store(e & 0xfffffffffcull, imm(CLEAR, 0xE2));
     nanosleep(&ms20, NULL);
     expect(marks() == 0, "a submission waits for its fence");
     syncpt_incr(30);
     took = wait_marks(1);
     expect(marks() == 1 && took < FAST, "the syncpoint increment started the submission");
+    const u32 fence_snapshot[] = {0xE1};
+    expect(marks_are(fence_snapshot, 1), "a submission fence delays execution, not the CPU command snapshot");
+    forget_marks();
+    e = mark(0xE3) | (1ull << 63);
+    submit_wait(&e, 1, 23, 30, 2);
+    cpu_store(e & 0xfffffffffcull, imm(CLEAR, 0xE4));
+    syncpt_incr(30);
+    wait_marks(1);
+    const u32 fence_sync[] = {0xE4};
+    expect(marks_are(fence_sync, 1), "SYNC still defers command fetching behind a submission fence");
 
     /* the puller's syncpoint wait in the middle of an incrementing batch (0x1C payload, 0x1D wait for syncpoint 31,
        then 0x1E and 0x1F, puller registers whose words would read as marks if the stream resumed in the wrong

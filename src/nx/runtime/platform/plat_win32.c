@@ -520,6 +520,31 @@ void plat_file_unmap(PFileMap* m) {
     else if (m->data && !m->borrowed) UnmapViewOfFile(m->data);
     file_map_clear(m);
 }
+int plat_file_write_mapped(const char* path, u64 size, u64 (*fill)(void*, u64, void*), void* arg) {
+    wchar_t* w;
+    HANDLE file, section;
+    void* data;
+    u64 used;
+    int ok = 0;
+    LARGE_INTEGER end;
+    if (!size || size > SIZE_MAX || size > INT64_MAX || !(w = snx_host_wpath(path))) return -1;
+    file = CreateFileW(w, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(w);
+    if (file == INVALID_HANDLE_VALUE) return -1;
+    section = CreateFileMappingW(file, NULL, PAGE_READWRITE, (DWORD)(size >> 32), (DWORD)size, NULL);
+    data = section ? MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, (SIZE_T)size) : NULL;
+    if (section) CloseHandle(section);
+    if (data) {
+        used = fill(data, size, arg);
+        ok = used && used <= size && FlushViewOfFile(data, (SIZE_T)used);
+        if (!UnmapViewOfFile(data)) ok = 0;
+        end.QuadPart = (LONGLONG)used;
+        if (ok && (!SetFilePointerEx(file, end, NULL, FILE_BEGIN) || !SetEndOfFile(file))) ok = 0;
+    }
+    if (!CloseHandle(file)) ok = 0;
+    if (!ok) remove(path);
+    return ok ? 0 : -1;
+}
 int plat_replace_file(const char* tmp, const char* dst) {
     wchar_t* wt = snx_host_wpath(tmp);
     wchar_t* wd = snx_host_wpath(dst);

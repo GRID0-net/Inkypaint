@@ -290,16 +290,31 @@ int main(void) {
     CHECK(gamepad_ini("gamepad_map", ""));
     CHECK(with(xbox, SDL_GAMEPAD_BUTTON_SOUTH) == B);
 
-    /* the game's vibration on every pad: each motor the stronger of the left and right devices' bands, as strong as
-       gamepad_rumble says */
+    /* the game's vibration on every pad: each motor the stronger of the left and right devices' bands. A Switch Pro
+       Controller (HD rumble, pad 1) plays an amplitude as it is; an ordinary pad (pad 0) through Eden's curve, which
+       lifts small amplitudes and keeps the full one full */
     gamepad_rumble(0x4000u | 0x1000u << 16, 0x2000u | 0x8000u << 16);
-    CHECK(motors[0] == (0x4000u | 0x8000u << 16) && motors[1] == motors[0] && motors[3] == motors[0]);
+    CHECK(motors[1] == (0x4000u | 0x8000u << 16));
+    {
+        Uint32 low = motors[0] & 0xFFFF, high = motors[0] >> 16;
+        CHECK(low > 0x4000u * 3 / 2 && low < 0xFFFFu && high > 0x8000u && high < 0xFFFFu); /* 0.25 is 0.43 */
+    }
+    gamepad_rumble(0x0400u, 0); /* a light touch the motor feels */
+    CHECK((motors[0] & 0xFFFF) > 0x0400u * 4 && (motors[1] & 0xFFFF) == 0x0400u);
+    gamepad_rumble(0xFFFFu | 0xFFFFu << 16, 0);
+    CHECK(motors[0] == 0xFFFFFFFFu && motors[1] == 0xFFFFFFFFu);
+    /* a high frequency softens its band, to 30% at the most (bits 48-63: 65535 is entirely) */
+    gamepad_rumble(0xFFFFu << 16 | 0xFFFFull << 48, 0);
+    CHECK(motors[1] >> 16 == 0 || (motors[1] >> 16) * 1u < 0x10u);
+    gamepad_rumble(0xFFFFu << 16 | 0xB333ull << 48, 0); /* softened by 70% */
+    CHECK((motors[1] >> 16) > 0x4CCCu - 0x40u && (motors[1] >> 16) < 0x4CCCu + 0x40u);
     CHECK(gamepad_ini("gamepad_rumble", "50"));
     gamepad_rumble(0x4000u | 0x1000u << 16, 0x2000u | 0x8000u << 16);
-    CHECK(motors[0] == (0x2000u | 0x4000u << 16));
+    CHECK(motors[1] == (0x2000u | 0x4000u << 16));
+    CHECK((motors[0] & 0xFFFF) > 0x2000u && (motors[0] & 0xFFFF) < 0x4000u * 2);
     CHECK(gamepad_ini("gamepad_rumble", "0")); /* never: a pad that shakes stops */
     gamepad_rumble(0xFFFFu | 0xFFFFu << 16, 0);
-    CHECK(motors[0] == 0 && motors[2] == 0);
+    CHECK(motors[0] == 0 && motors[1] == 0 && motors[2] == 0);
     CHECK(gamepad_ini("gamepad_rumble", "100"));
     gamepad_rumble(0xFFFFu, 0);
     CHECK(motors[0] == 0xFFFFu);
@@ -357,9 +372,11 @@ int main(void) {
         CHECK(sample[0].valid && sample[1].valid);
         CHECK(fabsf(sample[0].acceleration[0] + 1.0f) < 0.001f && fabsf(sample[0].acceleration[1] - 3.0f) < 0.001f &&
               fabsf(sample[0].acceleration[2] + 2.0f) < 0.001f);
-        CHECK(fabsf(sample[0].angular_velocity[0] - 1.0f) < 0.001f &&
-              fabsf(sample[0].angular_velocity[1] + 3.0f) < 0.001f &&
-              fabsf(sample[0].angular_velocity[2] - 2.0f) < 0.001f);
+        /* SDL's radians a second as the console's revolutions a second */
+        const float turn = 6.28318530718f;
+        CHECK(fabsf(sample[0].angular_velocity[0] - 1.0f / turn) < 0.0001f &&
+              fabsf(sample[0].angular_velocity[1] + 3.0f / turn) < 0.0001f &&
+              fabsf(sample[0].angular_velocity[2] - 2.0f / turn) < 0.0001f);
         CHECK(fabsf(sample[1].acceleration[0] - 1.0f) < 0.001f && fabsf(sample[1].acceleration[1] - 1.0f) < 0.001f &&
               sample[1].acceleration[2] == 0.0f);
         gamepad_motion(0, sample);

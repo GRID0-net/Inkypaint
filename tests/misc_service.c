@@ -417,15 +417,18 @@ static void test_vibration(SvcObj* h) {
     static const u32 both[2] = {0x00000003u, 0x00010003u};
     static const float values[2][4] = {{0.25f, 160, 0, 320}, {1.5f, 160, 0.5f, 320}};
     vibration(h, 0x00000003u, 0.5f, 1.0f);
-    CHECK(g_hle.hid.pad1.rumble[0] == (32767u | 65535u << 16) && g_hle.hid.pad1.rumble[1] == 0);
+    CHECK((u32)g_hle.hid.pad1.rumble[0] == (32767u | 65535u << 16) && g_hle.hid.pad1.rumble[1] == 0);
+    /* the bands' softening above the amplitudes (Eden's): 160 Hz is 5% off the low band, 320 Hz 17% off the high */
+    CHECK(labs((long)(g_hle.hid.pad1.rumble[0] >> 32 & 0xffff) - 3277) <= 1 &&
+          labs((long)(g_hle.hid.pad1.rumble[0] >> 48) - 11234) <= 1);
     vibration(h, 0x00010020u, 0.0f, 0.25f); /* the handheld's right device */
-    CHECK(g_hle.hid.pad1.rumble[1] == 16383u << 16);
+    CHECK((u32)g_hle.hid.pad1.rumble[1] == 16383u << 16);
     vibration(h, 0x00000003u, -1.0f, NAN); /* none past the ends, nor a NaN */
-    CHECK(g_hle.hid.pad1.rumble[0] == 0);
+    CHECK((u32)g_hle.hid.pad1.rumble[0] == 0);
     vibrations(h, both, values, 2);
-    CHECK(g_hle.hid.pad1.rumble[0] == 16383u && g_hle.hid.pad1.rumble[1] == (65535u | 32767u << 16));
+    CHECK((u32)g_hle.hid.pad1.rumble[0] == 16383u && (u32)g_hle.hid.pad1.rumble[1] == (65535u | 32767u << 16));
     vibrations(h, both, values, 0);
-    CHECK(g_hle.hid.pad1.rumble[0] == 16383u);
+    CHECK((u32)g_hle.hid.pad1.rumble[0] == 16383u);
 }
 static void test_npad_players(SvcObj* h) {
     static const u32 first_ids[] = {0, 1, 2, 3, 0x20};
@@ -468,17 +471,18 @@ static void test_npad_players(SvcObj* h) {
     CHECK(sticks[0] == 0 && sticks[1] == -1000);
     npad_latest_sticks(2, HO_HidNpadInternalState_joy_right_lifo, sticks);
     CHECK(sticks[2] == 0 && sticks[3] == 2000);
-    /* Replacing a physical controller in No2 resets its sensor orientation before reading the new sample. */
+    /* Replacing a physical controller in No2 resets its sensor orientation before reading the new sample. The
+       direction matrix is Eden's (hid_motion.c): on its side (gravity along +Y), the third row points along +Y */
     g_hle.hid.pad_extra[0].source_id = 111;
     g_hle.hid.pad_extra[0].motion[0].valid = 1;
     g_hle.hid.pad_extra[0].motion[0].acceleration[1] = 1.0f;
     hid_update();
-    CHECK(fabsf(npad_latest_direction(1, HO_HidNpadInternalState_joy_left_six_axis_sensor_lifo, 28) + 1.0f) < 0.0005f);
+    CHECK(fabsf(npad_latest_direction(1, HO_HidNpadInternalState_joy_left_six_axis_sensor_lifo, 28) - 1.0f) < 0.01f);
     g_hle.hid.pad_extra[0].source_id = 222;
     g_hle.hid.pad_extra[0].motion[0].acceleration[1] = 0.0f;
     g_hle.hid.pad_extra[0].motion[0].acceleration[2] = -1.0f;
     hid_update();
-    CHECK(fabsf(npad_latest_direction(1, HO_HidNpadInternalState_joy_left_six_axis_sensor_lifo, 28)) < 0.0005f);
+    CHECK(fabsf(npad_latest_direction(1, HO_HidNpadInternalState_joy_left_six_axis_sensor_lifo, 28)) < 0.01f);
     g_hle.hid.pad_extra[0].motion[0].valid = 0;
     /* upright, a single Joy-Con's header says so (footer JoyLeftVertical, ABXY oriented); held sideways, the other */
     CHECK(e1[HO_HidNpadInternalState_applet_footer_ui_type] == 9);
@@ -522,7 +526,7 @@ static void test_npad_players(SvcObj* h) {
     CHECK(npad_latest_buttons(3, HO_HidNpadInternalState_joy_left_lifo) == 1ull << 12);
     CHECK(npad_latest_buttons(4, HO_HidNpadInternalState_joy_right_lifo) == 1ull);
     vibration(h, 0x00010407u, 0.5f, 0); /* virtual No5's right device belongs to physical No4 */
-    CHECK(g_hle.hid.pad_extra[2].rumble[1] == 32767u);
+    CHECK((u32)g_hle.hid.pad_extra[2].rumble[1] == 32767u);
     joy_assign(h, 124, 3, 0);
     CHECK(npad_style_at(3) == 1u << 2 && npad_style_at(4) == 0);
     /* Two physical single Joy-Cons can become one JoyDual without mixing player buttons. */
@@ -533,7 +537,7 @@ static void test_npad_players(SvcObj* h) {
     npad_latest_sticks(1, HO_HidNpadInternalState_joy_dual_lifo, sticks);
     CHECK(sticks[0] == 0 && sticks[1] == -1000 && sticks[2] == 0 && sticks[3] == 2000);
     vibration(h, 0x00010105u, 0.25f, 0); /* merged No2's right device goes to physical No3 */
-    CHECK(g_hle.hid.pad_extra[1].rumble[1] == 16383u);
+    CHECK((u32)g_hle.hid.pad_extra[1].rumble[1] == 16383u);
     g_hle.hid.pad_extra[0].motion[0].valid = g_hle.hid.pad_extra[1].motion[0].valid = 1;
     g_hle.hid.pad_extra[0].motion[0].acceleration[2] = g_hle.hid.pad_extra[1].motion[0].acceleration[2] = -1;
     g_hle.hid.pad_extra[1].motion[0].angular_velocity[0] = 1;

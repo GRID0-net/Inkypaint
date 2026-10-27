@@ -355,7 +355,8 @@ void video_init(const char* title, const char* addons) {
     int w, h;
     char header[768];
     snprintf(g_title, sizeof g_title, "%s", title);
-    backend_window_size(&w, &h);
+    w = g_settings.window_width;
+    h = g_settings.window_height;
     if (addons[0])
         snprintf(header, sizeof header, "%s (%s) - %s", title, addons, snx_build_info());
     else
@@ -1122,6 +1123,10 @@ void video_poll(void) {
     /* the menu had the controls when this poll began: the press that closes it (B) is in this poll's state */
     int menu_had = overlay_shown() || vpad_editing();
     while (!g_opt_headless && SDL_PollEvent(&e)) {
+        if (e.type == SDL_EVENT_GAMEPAD_SENSOR_UPDATE) { /* every reading, for the frame's mean (gamepad_motion) */
+            gamepad_sensor_event(e.gsensor.which, e.gsensor.sensor, e.gsensor.data);
+            continue;
+        }
         if (press_event(&e)) continue;
         if (overlay_event(&e)) continue;
         switch (e.type) {

@@ -82,6 +82,8 @@ FsTreeResult fs_tree_add_virtual(FsTree* tree, const char* relative_path, const 
 /* Startup only: opens and maps every regular file under node (plat_file_share) and makes the subtree readonly, so no
    mapped file is ever truncated, replaced or renamed. A file that can't be mapped keeps fd -1 and is read on demand. */
 FsTreeResult fs_tree_share(FsTree* tree, FsNode* node, unsigned* shared, unsigned* failed);
+/* Startup only: the subtree readonly, as fs_tree_share makes it, with no file opened: each is read on demand */
+FsTreeResult fs_tree_seal(FsTree* tree, FsNode* node);
 void fs_tree_retain(FsNode* node);
 void fs_tree_release(FsNode* node);
 

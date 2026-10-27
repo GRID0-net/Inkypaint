@@ -40,6 +40,32 @@ enum {
 void network_set_room(SnxRoom* room) { g_hle.bsd.room = room; }
 SnxRoom* network_room(void) { return g_hle.bsd.room; }
 static int reachable(SnxSocket* s, const SnxSockAddr* a) { return snx_room_socket(s) || network_reachable(a); }
+/* lan_adapter (settings.txt): the interface the console reports and the adapters its broadcasts go out on, under
+   iface_lk. One the setting names and the host doesn't have (ZeroTier not connected yet) leaves the console on the
+   one the internet goes through, which is said once, until it shows up */
+static void read_lan_adapter(void) {
+    const char* spec = g_settings.lan_adapter;
+    int all = !strcmp(spec, "all"), chosen = spec[0] && strcmp(spec, "auto") && !all;
+    if (strcmp(g_hle.bsd.lan_spec, spec)) g_hle.bsd.lan_missing_said = 0;
+    snprintf(g_hle.bsd.lan_spec, sizeof g_hle.bsd.lan_spec, "%s", spec);
+    g_hle.bsd.nlan = 0;
+    if (chosen && !snx_net_find_interface(spec, &g_hle.bsd.iface)) {
+        g_hle.bsd.iface_have = 1;
+        g_hle.bsd.lan[g_hle.bsd.nlan++] = g_hle.bsd.iface;
+        if (g_hle.bsd.lan_missing_said != 2)
+            LOG("bsd: LAN adapter %s, %u.%u.%u.%u (lan_adapter=%s)\n", g_hle.bsd.iface.name, g_hle.bsd.iface.ip[0],
+                g_hle.bsd.iface.ip[1], g_hle.bsd.iface.ip[2], g_hle.bsd.iface.ip[3], spec);
+        g_hle.bsd.lan_missing_said = 2;
+        return;
+    }
+    if (chosen && !g_hle.bsd.lan_missing_said) {
+        WARN("bsd: no network adapter matches lan_adapter=%s: the game uses the one the internet goes through\n", spec);
+        g_hle.bsd.lan_missing_said = 1;
+    }
+    g_hle.bsd.iface_have = !snx_net_primary_interface(&g_hle.bsd.iface);
+    if (all) g_hle.bsd.nlan = snx_net_interfaces(g_hle.bsd.lan, 16);
+    else if (chosen && g_hle.bsd.iface_have) g_hle.bsd.lan[g_hle.bsd.nlan++] = g_hle.bsd.iface;
+}
 /* nifm asks often (some games every frame): the host's state is read again after two seconds. In a room the
    connection is the room's, its address and a /24, as Eden's nifm gives the room's address */
 int network_interface(SnxNetInterface* out) {
@@ -57,8 +83,9 @@ int network_interface(SnxNetInterface* out) {
     if (!g_settings.network) return -SNX_ENETDOWN;
     pm_lock(&g_hle.bsd.iface_lk);
     time_t now = time(NULL);
-    if (!g_hle.bsd.iface_when || now - g_hle.bsd.iface_when >= 2 || now < g_hle.bsd.iface_when) {
-        g_hle.bsd.iface_have = !snx_net_primary_interface(&g_hle.bsd.iface);
+    if (!g_hle.bsd.iface_when || now - g_hle.bsd.iface_when >= 2 || now < g_hle.bsd.iface_when ||
+        strcmp(g_hle.bsd.lan_spec, g_settings.lan_adapter)) {
+        read_lan_adapter();
         g_hle.bsd.iface_when = now;
     }
     if (g_hle.bsd.iface_have && out) *out = g_hle.bsd.iface;
@@ -181,10 +208,9 @@ static int sockopt_in(u32 level, u32 name, int* l, int* n) {
 
 /* guest sockaddr_in {u8 len, u8 family, be16 port, in_addr, zero[8]}, sockaddr_in6 {len, family, port, u32
    flowinfo, in6_addr, u32 scope} */
-static int addr_in(u64 a, u64 n, SnxSockAddr* out) {
+static int addr_decode(const u8* p, u64 n, SnxSockAddr* out) {
     memset(out, 0, sizeof *out);
-    if (!a || n < 8) return -SNX_EINVAL;
-    const u8* p = GP(a);
+    if (!p || n < 8) return -SNX_EINVAL;
     int fam = p[1] ? domain_in(p[1]) : SNX_AF_INET;
     if (fam == SNX_AF_INET) {
         out->family = SNX_AF_INET;
@@ -202,9 +228,12 @@ static int addr_in(u64 a, u64 n, SnxSockAddr* out) {
     }
     return -SNX_EAFNOSUPPORT;
 }
+static int addr_in(u64 a, u64 n, SnxSockAddr* out) {
+    return addr_decode(a ? GP(a) : NULL, n, out);
+}
 /* writes what fits of the address, and returns the length written (the addrlen the guest gets back), as a BSD stack
    answers getsockname, getpeername, accept and recvfrom */
-static u32 addr_out(const SnxSockAddr* a, u64 dst, u64 cap) {
+static u32 addr_encode(const SnxSockAddr* a, u8* dst, u64 cap) {
     u8 p[BSD_SOCKADDR_IN6];
     u32 n = a->family == SNX_AF_INET6 ? BSD_SOCKADDR_IN6 : BSD_SOCKADDR_IN;
     memset(p, 0, sizeof p);
@@ -219,8 +248,12 @@ static u32 addr_out(const SnxSockAddr* a, u64 dst, u64 cap) {
         memcpy(p + 4, a->addr, 4);
     if (!dst) return 0;
     if (cap < n) n = (u32)cap;
-    memcpy(GP(dst), p, n);
+    memcpy(dst, p, n);
     return n;
+}
+
+static u32 addr_out(const SnxSockAddr* a, u64 dst, u64 cap) {
+    return addr_encode(a, dst ? GP(dst) : NULL, cap);
 }
 
 /* an address for the log, at level 2: "127.0.0.1:1234", "[v6]:1234" or "?" */
@@ -571,6 +604,43 @@ static int64_t do_recv(Bsd* b, IpcBuf message, i32 fd, u32 gflags, IpcBuf addr, 
     snx_socket_unref(s);
     return r;
 }
+/* A datagram to the limited broadcast address (255.255.255.255), or to the subnet broadcast of the address the
+   console reports, goes out on the adapter the host routes it through, the one the internet goes through. With
+   lan_adapter it goes to the broadcast address of each adapter the setting chose instead, which the host sends out on
+   that adapter: one, or every one with lan_adapter=all (the first send's result answers) */
+static int64_t send_datagram(SnxSocket* s, const void* data, size_t n, int flags, const SnxSockAddr* to) {
+    static const u8 limited[4] = {255, 255, 255, 255};
+    SnxNetInterface lan[16];
+    int nlan = 0;
+    if (to && to->family == SNX_AF_INET && snx_socket_type(s) == SNX_SOCK_DGRAM && g_settings.lan_adapter[0] &&
+        !network_interface(NULL)) {
+        pm_lock(&g_hle.bsd.iface_lk);
+        int broadcast = !memcmp(to->addr, limited, 4);
+        if (!broadcast && g_hle.bsd.iface_have) {
+            broadcast = 1;
+            for (int k = 0; k < 4; k++)
+                if (to->addr[k] != (u8)(g_hle.bsd.iface.ip[k] | ~g_hle.bsd.iface.mask[k])) broadcast = 0;
+        }
+        if (broadcast) {
+            nlan = g_hle.bsd.nlan;
+            memcpy(lan, g_hle.bsd.lan, (size_t)nlan * sizeof *lan);
+        }
+        pm_unlock(&g_hle.bsd.iface_lk);
+    }
+    if (!nlan) return snx_socket_send(s, data, n, flags, to);
+    int64_t first = 0;
+    for (int i = 0; i < nlan; i++) {
+        SnxSockAddr a = *to;
+        for (int k = 0; k < 4; k++) a.addr[k] = (u8)(lan[i].ip[k] | ~lan[i].mask[k]);
+        int64_t r = snx_socket_send(s, data, n, flags, &a);
+        if (!i) first = r;
+        else if (first < 0 && r >= 0) first = r;
+        if (g_settings.log_level >= 2)
+            LOGV("bsd: broadcast for %s to %u.%u.%u.%u = %lld\n", lan[i].name, a.addr[0], a.addr[1], a.addr[2],
+                 a.addr[3], (long long)r);
+    }
+    return first;
+}
 static int64_t do_send(Bsd* b, IpcBuf message, i32 fd, u32 gflags, const SnxSockAddr* to) {
     u64 a = message.addr, n = message.size;
     SnxSocket* s = fd_get(b, fd, NULL);
@@ -582,7 +652,7 @@ static int64_t do_send(Bsd* b, IpcBuf message, i32 fd, u32 gflags, const SnxSock
         r = -SNX_EFAULT;
     else {
         if (a) own_acquire(a, n); /* the kernel reads the buffer, and can't wait on memory the GPU holds */
-        r = snx_socket_send(s, a ? GP(a) : NULL, n, msg_in(gflags), to);
+        r = send_datagram(s, a ? GP(a) : NULL, n, msg_in(gflags), to);
     }
     if (to && g_settings.log_level >= 2) {
         char t[64];
@@ -631,6 +701,154 @@ static int nn_socket_sf_IClient_Accept(SvcObj* self, i32 fd, IpcBuf addr, i32* r
     r = fd_add(b, n, d.flags & (BSD_O_NONBLOCK | BSD_O_NONBLOCK_NX), 0);
     return reply_len(r, r < 0 ? 0 : addr_out(&peer, addr.addr, addr.size), ret, bsd_errno, addrlen);
 }
+/* Batch handlers adapted from GRID0-Citrosis: Copyright 2025 citron Emulator Project, GPL-2.0-or-later. */
+/* Horizon serializes mmsghdrs in the B buffer: one header byte, then name length/name, iov count,
+   (u64 length/data) per iov, control length/control, flags and transferred length. Adapted from
+   GRID0-Citrosis's sockets/bsd.cpp (Eden/yuzu copyrights above). Validate the entire batch before I/O. */
+typedef struct {
+    size_t name, name_size, iovs, count, capacity, flags, length;
+} BsdMessage;
+static int mmsg_take(size_t* pos, size_t size, u64 count) {
+    if (count > size - *pos) return 0;
+    *pos += (size_t)count;
+    return 1;
+}
+static int mmsg_parse(const u8* buf, size_t size, u32 count, BsdMessage* messages) {
+    size_t pos = 1;
+    if (!size) return 0;
+    for (u32 i = 0; i < count; i++) {
+        BsdMessage* m = &messages[i];
+        if (!mmsg_take(&pos, size, 4)) return 0;
+        m->name_size = snx_ld_le32(buf + pos - 4);
+        m->name = pos;
+        if (!mmsg_take(&pos, size, m->name_size) || !mmsg_take(&pos, size, 4)) return 0;
+        m->count = snx_ld_le32(buf + pos - 4);
+        m->iovs = pos;
+        m->capacity = 0;
+        for (size_t j = 0; j < m->count; j++) {
+            u64 n;
+            if (!mmsg_take(&pos, size, 8)) return 0;
+            n = snx_ld_le64(buf + pos - 8);
+            if (!mmsg_take(&pos, size, n)) return 0;
+            m->capacity += (size_t)n; /* disjoint, bounded by size */
+        }
+        if (!mmsg_take(&pos, size, 4)) return 0;
+        /* Ancillary data is not implemented. Do not silently discard a sender's control messages. */
+        if (snx_ld_le32(buf + pos - 4)) return 0;
+        m->flags = pos;
+        if (!mmsg_take(&pos, size, 4)) return 0;
+        m->length = pos;
+        if (!mmsg_take(&pos, size, 4)) return 0;
+    }
+    return 1;
+}
+static int mmsg(SvcObj* self, i32 fd, u32 count, u32 flags, IpcBuf data, int receive,
+                i64 timeout_sec, i64 timeout_nsec, i32* ret, u32* bsd_errno) {
+    BsdMessage* messages;
+    SnxSocket *s, *companion;
+    u8 *buf, *scratch;
+    size_t size = (size_t)data.size;
+    i32 done = 0;
+    int64_t result = 0;
+    /* Bounded per-call snapshot, metadata and gather buffer, owned by this call across socket waits. */
+    if (count > 1024 || data.size > 16 * 1024 * 1024 || !data.addr || !size)
+        return reply(-SNX_EINVAL, ret, bsd_errno);
+    if (!count) return reply(0, ret, bsd_errno);
+    messages = malloc(count * sizeof *messages + 2 * size);
+    if (!messages) return reply(-SNX_ENOMEM, ret, bsd_errno);
+    buf = (u8*)(messages + count);
+    scratch = buf + size;
+    own_acquire(data.addr, data.size);
+    memcpy(buf, GP(data.addr), size);
+    if (!mmsg_parse(buf, size, count, messages)) {
+        free(messages);
+        return reply(-SNX_EINVAL, ret, bsd_errno);
+    }
+    s = fd_get(self->data, fd, NULL);
+    if (!s) {
+        free(messages);
+        return reply(-SNX_EBADF, ret, bsd_errno);
+    }
+    companion = receive ? fd_get_bcast(self->data, fd) : NULL;
+    if (receive && (timeout_sec < 0 || timeout_nsec < 0 || timeout_nsec >= 1000000000ll)) {
+        result = -SNX_EINVAL;
+        goto finish;
+    }
+    /* A zero timespec means no deadline in the SDK. Nonblocking sockets never wait here. */
+    if (receive && (timeout_sec || timeout_nsec) && !snx_socket_nonblocking(s) &&
+        !(msg_in(flags) & SNX_MSG_DONTWAIT)) {
+        SnxPollEntry p = {s, -1, SNX_POLLIN, 0};
+        i64 millis = timeout_sec > 2147483 ? 2147483647 :
+                     timeout_sec * 1000 + (timeout_nsec + 999999) / 1000000;
+        int ms = millis > 2147483647 ? 2147483647 : (int)millis;
+        int r = snx_net_poll(&p, 1, ms);
+        if (r <= 0) { result = r; goto finish; }
+    }
+    for (u32 i = 0; i < count; i++) {
+        BsdMessage* m = &messages[i];
+        SnxSockAddr address = {0};
+        size_t pos = m->iovs, offset = 0;
+        int f = msg_in(flags);
+        if (!receive && m->name_size) {
+            /* The address is read from the validated snapshot, through the shared address decoder below. */
+            result = addr_decode(buf + m->name, m->name_size, &address);
+            if (result) break;
+            if (!reachable(s, &address)) { result = -SNX_ENETUNREACH; break; }
+        }
+        for (size_t j = 0; j < m->count; j++) {
+            size_t n = (size_t)snx_ld_le64(buf + pos);
+            pos += 8;
+            if (!receive) memcpy(scratch + offset, buf + pos, n);
+            offset += n;
+            pos += n;
+        }
+        if (receive) {
+            /* Once data was returned, never block the batch waiting for another message. */
+            if (done) f |= SNX_MSG_DONTWAIT;
+            result = companion ? recv_either(s, companion, scratch, m->capacity, f, &address) :
+                     snx_socket_recv(s, scratch, m->capacity, f, &address, NULL);
+        } else
+            result = send_datagram(s, scratch, m->capacity, f, m->name_size ? &address : NULL);
+        if (result < 0) break;
+        if (receive) {
+            size_t left = (size_t)result;
+            pos = m->iovs;
+            offset = 0;
+            for (size_t j = 0; j < m->count; j++) {
+                size_t n = (size_t)snx_ld_le64(buf + pos), take = left < n ? left : n;
+                pos += 8;
+                memcpy(buf + pos, scratch + offset, take);
+                offset += take;
+                left -= take;
+                pos += n;
+            }
+            snx_st_le32(buf + m->flags, 0);
+            if (m->name_size && address.family) addr_encode(&address, buf + m->name, m->name_size);
+        }
+        snx_st_le32(buf + m->length, (u32)result);
+        done++;
+        if (!result || (!receive && (u64)result < m->capacity)) break;
+    }
+finish:
+    if (done) memcpy(GP(data.addr), buf, size);
+    snx_socket_unref(companion);
+    snx_socket_unref(s);
+    free(messages);
+    LOGV("bsd: %sMMsg(%d, %u) = %d, error %lld\n", receive ? "Recv" : "Send", fd, count, done,
+         (long long)(result < 0 ? -result : 0));
+    return reply(done ? done : result, ret, bsd_errno);
+}
+static int nn_socket_sf_IClient_SendMMsg(SvcObj* self, i32 fd, u32 count, u32 flags, IpcBuf data,
+                                        i32* ret, u32* bsd_errno) {
+    return mmsg(self, fd, count, flags, data, 0, 0, 0, ret, bsd_errno);
+}
+static int nn_socket_sf_IClient_RecvMMsg(SvcObj* self, i32 fd, u32 count, u32 flags, u32 reserved,
+                                        const nn_socket_sf_MMsgTimeout* timeout, IpcBuf data,
+                                        i32* ret, u32* bsd_errno) {
+    (void)reserved;
+    return mmsg(self, fd, count, flags, data, 1, timeout->sec, timeout->nsec, ret, bsd_errno);
+}
+
 /* Bind, Connect */
 static int bind_connect(Bsd* b, i32 fd, IpcBuf addr, int connect, i32* ret, u32* bsd_errno) {
     SnxSockAddr sa;

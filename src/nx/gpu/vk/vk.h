@@ -233,6 +233,9 @@ void vk_rec_init(void);
 int vk_rec_threaded(void); /* the frame's commands go through the recording thread */
 u64 vk_rec_behind(void); /* bytes of commands handed to the recording thread and not recorded yet (any thread) */
 void vk_rec_begin(VkCommandBuffer cb); /* begins cb, the frame's command buffer from now on */
+/* resets a frame slot's command pool, whose submissions are done, before its next vk_rec_begin: on the recording
+   thread, in order with it, when that thread records */
+void vk_rec_reset_pool(VkCommandPool pool);
 /* ends and submits cb with those semaphores (s[0] the graphics timeline's) */
 void vk_rec_submit(VkCommandBuffer cb, const VkSemaphoreSubmitInfo* w, u32 nw, const VkSemaphoreSubmitInfo* s,
                    u32 ns);
@@ -259,6 +262,8 @@ int vk_rec_hoist(int on);
 int vk_rec_pass_load_clear(u32 i, const VkClearValue* v);
 u32 vk_rec_frame_sets(u32 slot);   /* new sets made in the slot since its reset */
 void rec_CmdBindPipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline pipe);
+/* Resource-generating graphics draws must execute even while async pipelines are enabled. */
+void rec_CmdBindGraphicsPipeline(VkCommandBuffer cb, VkPipeline pipe, int allow_async);
 void rec_CmdBindIndexBuffer(VkCommandBuffer cb, VkBuffer buf, VkDeviceSize off, VkIndexType type);
 void rec_CmdDraw(VkCommandBuffer cb, u32 count, u32 instances, u32 first, u32 first_instance);
 void rec_CmdDrawIndexed(VkCommandBuffer cb, u32 count, u32 instances, u32 first, i32 vertex_offset,
@@ -430,6 +435,13 @@ typedef struct Surf {
     u32 draw_wseen; /* CPU write-tracking clock at that baseline, zero after a reload */
     int draw_has_hash;
     int feeds_tex; /* a texture asked for its pixels (vk_rt_drawn_fresh): without write tracking, its baselines are hashed */
+    /* render targets: the last hash of their guest memory (surface.c rt_hash_now), which memory still holds within the
+       write epoch it was taken in when the GPU front end wrote none of it since mh_gw. Memory that hashed the same over
+       a few whole hashes is sampled in between them */
+    u64 mh_hash, mh_shash, mh_gw, mh_gva;
+    u32 mh_epoch, mh_full, mh_stable;
+    int mh_valid;
+    int drawn_parked; /* parked while in the drawn list: out of it until taken out of parking */
     /* render targets: the two textures last copied from it (gpu/vk/texture.c), with its wgen and the texture's upload
        generation then, so two textures over one target don't copy it again on each other's binds */
     struct {
@@ -518,6 +530,14 @@ u64 vk_surf_flush_size(const Surf* s);
 void vk_surf_flush_record(Surf* s, VkBuffer buf, u64 at);
 void vk_surf_flush_land(Surf* s, const u8* p, const u8* original, u64 wgen);
 void vk_tex_note_writeback(Surf* s);
+/* counts of the GPU thread's hot paths, logged with the renderer's other counts every 600 presents */
+typedef struct {
+    u64 take, take_walked, take_found;       /* tex_take_drawn: calls, drawn-list entries walked, targets in range */
+    u64 mh_full, mh_full_bytes, mh_sampled, mh_kept; /* render-target memory: hashed whole, sampled, known this epoch */
+    u64 top_scan, top_scan_bytes, top_kept;  /* index ranges scanned for their highest index, answered without */
+    u64 memo_hit, memo_miss;                 /* tex_resolve's memo */
+} VkHot;
+extern VkHot g_vk_hot;
 void vk_rt_drawn(Surf* s);      /* a render target was drawn to (gpu/vk/render.c) */
 void vk_rt_drawn_full(Surf* s); /* a full clear or blit replaced every pixel */
 int vk_rt_drawn_fresh(Surf* s); /* no guest-memory write has replaced the target since its last draw */
@@ -575,6 +595,11 @@ void vk_bl_range(const VkBlMove* m, u64* lo, u64* hi);
    Moves go between vk_bl_barrier(cb, 1) and vk_bl_barrier(cb, 0), several of them between one pair when they write
    different bytes */
 int vk_bl_move(VkCommandBuffer cb, const VkBlMove* m, int to_bl, VkBuffer bl, u64 bl_at, VkBuffer lin, u64 lin_at);
+/* Citrosis's non-finite HDR upload policy, fused with deswizzling (or copying linear rows). Direct image copies
+   and writebacks never use it. Modes are zero (unchanged), binary16, binary32, packed B10G11R11. */
+u32 vk_hdr_mode(const VkFmt* f);
+int vk_bl_upload(VkCommandBuffer cb, const VkBlMove* m, VkBuffer in, u64 in_at, VkBuffer out, u64 out_at,
+                 u32 sanitize, int linear_input);
 /* before moves (1): after the transfers and dispatches that used either side's buffers; after them (0): before the
    transfers, dispatches and host reads of what they wrote */
 void vk_bl_barrier(VkCommandBuffer cb, int before);
@@ -718,6 +743,9 @@ int vk_buf_get_input(u64 gva, u64 len, u64 align, VkBuffer* buf, u64* off);
 /* the same inside a window shared with the ranges it overlaps (a storage buffer with no size of its own): *off is the
    range's offset in it, a multiple of minStorageBufferOffsetAlignment */
 int vk_buf_get_window(u64 gva, u64 len, VkBuffer* buf, u64* off);
+/* what tells the bytes the last vk_buf_get_input of [gva, gva + len) in this submit epoch gave draws: the same value,
+   the same bytes. 0 when unknown (not fetched in this epoch, or bytes the GPU wrote or patched in) */
+u64 vk_buf_content(u64 gva, u64 len);
 /* the cache lines vk_buf_get(gva, len) will read, fetched ahead: step 0 its index slot, step 1 (after step 0 for every
    range) its entry. For a caller with several ranges to look up, so their misses overlap */
 void vk_buf_prefetch(u64 gva, u64 len, int step);

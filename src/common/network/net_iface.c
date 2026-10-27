@@ -306,6 +306,41 @@ int snx_net_interfaces(SnxNetInterface* out, int max) {
             }
     return n;
 }
+static int lower(int c) { return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c; }
+static int same_text(const char* a, const char* b) {
+    for (; *a && *b; a++, b++)
+        if (lower((unsigned char)*a) != lower((unsigned char)*b)) return 0;
+    return !*a && !*b;
+}
+static int has_text(const char* text, const char* part) {
+    for (; *text; text++) {
+        size_t i = 0;
+        while (part[i] && text[i] && lower((unsigned char)text[i]) == lower((unsigned char)part[i])) i++;
+        if (!part[i]) return 1;
+    }
+    return 0;
+}
+int snx_net_virtual_lan(const SnxNetInterface* i) {
+    const char* n = i->name;
+    return !strncmp(n, "zt", 2) || !strncmp(n, "feth", 4) || !strncmp(n, "ham", 3) || has_text(n, "zerotier") ||
+           has_text(n, "hamachi") || has_text(n, "radmin");
+}
+int snx_net_find_interface(const char* spec, SnxNetInterface* out) {
+    SnxNetInterface list[32];
+    uint8_t ip[4];
+    int n = snx_net_interfaces(list, 32), by_ip = snx_net_parse_ipv4(spec, ip);
+    for (int pass = 0; pass < 2; pass++) /* an exact name or address first, then a part of a name */
+        for (int i = 0; i < n; i++) {
+            int match = same_text(spec, "virtual") ? pass == 0 && snx_net_virtual_lan(&list[i])
+                        : pass == 0              ? same_text(list[i].name, spec) || (by_ip && !memcmp(list[i].ip, ip, 4))
+                                                 : !by_ip && *spec && has_text(list[i].name, spec);
+            if (match) {
+                *out = list[i];
+                return 0;
+            }
+        }
+    return -SNX_ENETDOWN;
+}
 int snx_net_primary_interface(SnxNetInterface* out) {
     SnxNetInterface list[16];
     if (snx_net_interfaces(list, 16) <= 0) return -SNX_ENETDOWN;

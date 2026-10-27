@@ -23,6 +23,7 @@
 
 typedef struct {
     u64 start, len, hash, shash;
+    u64 cid; /* the hash of the bytes draws read from buf at off, 0 when patched or held by the GPU (vk_buf_content) */
     u32 epoch, strict_epoch, chk_epoch, schk, stable, used;
     u64 gw;    /* GPU-side write generation at the last check */
     u64 cs_adds, gfx_adds; /* vk_compute_adds and vk_buf_adds when pending results were last checked for */
@@ -1905,6 +1906,7 @@ static int buf_get_owned(u32 i, Vb* e, u64 gva, u64 len, int strict, VkBuffer* b
     }
     drop_own(i);
     e->hash = 0;
+    e->cid = 0;
     e->stable = 0;
     vk_render_end(); /* the GPU's copies happen outside rendering passes */
     u8* p = vk_stage_upload(len, vk_stage_align(), &sb, &so);
@@ -1959,6 +1961,7 @@ static int buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off, int strict, u64 al
             u32 wnow = vk_ww_now();
             if (patch_own(i, host, e->wseen)) {
                 e->wseen = wnow;
+                e->cid = 0;
                 w = 0;
             }
         }
@@ -1999,6 +2002,7 @@ static int buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off, int strict, u64 al
         u32 wnow = vk_ww_now();
         u64 gnow = gpu_mem_generation(); /* both before the bytes are read */
         if (host && patch_dirty(i, gva, host, e->gw, e->wseen)) {
+            e->cid = 0;
             e->gw = gnow;
             e->wseen = wnow;
             e->epoch = g_vk_epoch;
@@ -2038,6 +2042,7 @@ static int buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off, int strict, u64 al
         e->gfx_adds = vk_buf_adds();
     }
     int changed = e->hash != h;
+    e->cid = h ? h : 1;
     if (e->hash == h && e->stable < 100000)
         e->stable++;
     else if (e->hash != h) {
@@ -2081,6 +2086,11 @@ int vk_buf_get(u64 gva, u64 len, VkBuffer* buf, u64* off) { return buf_get(gva, 
    that way, each a copy of its range into staging and a GPU copy of the result over it */
 int vk_buf_get_input(u64 gva, u64 len, u64 align, VkBuffer* buf, u64* off) {
     return buf_get(gva, len, buf, off, 0, align);
+}
+u64 vk_buf_content(u64 gva, u64 len) {
+    if (!g_vbi || !len || len > 0xFFFFFFFFull) return 0;
+    u32 i = g_vbi[vb_slot(gva, (u32)len)].idx;
+    return i && g_vb[i].epoch == g_vk_epoch ? g_vb[i].cid : 0;
 }
 
 /* Windows: guest ranges that storage buffers with no size of their own (a bare address in a program's constant buffer,

@@ -199,6 +199,14 @@ int vk_bl_move(VkCommandBuffer cb, const VkBlMove* m, int to_bl, VkBuffer bl, u6
     batch_moves++;
     return 1;
 }
+VkHot g_vk_hot; /* the hot-path counters, surface.c's */
+/* the HDR sanitizer (blocklinear.c) never runs for the cases' formats: an upload is the plain deswizzle above */
+u32 vk_hdr_mode(const VkFmt* f) { (void)f; return 0; }
+int vk_bl_upload(VkCommandBuffer cb, const VkBlMove* m, VkBuffer in, u64 in_at, VkBuffer out, u64 out_at, u32 sanitize,
+                 int linear_input) {
+    CHECK(!sanitize && !linear_input);
+    return vk_bl_move(cb, m, 0, in, in_at, out, out_at);
+}
 int vk_tc_converts(const VkFmt* f) { return f->conv != VKC_NONE && f->conv != VKC_ASTC; }
 VkTcShape vk_tc_shape(const VkFmt* f, u32 w) {
     CHECK(f->conv == VKC_RGBA4);

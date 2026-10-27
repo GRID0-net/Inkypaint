@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "nx/runtime/main.h"
+#include "nx/runtime/inkypaint_display.h"
 #include "nx/runtime/options.h"
 #include "nx/gpu/gpu.h"
 #include "nx/hle/services/nvdrv.h"
@@ -430,11 +431,12 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                 ch = (u32)((u64)sh * (u32)swh / (u32)g_vk.sc_win_h);
             }
             if (src && fw && fh) {
+                float aspect = inkypaint_display_fill() ? inkypaint_display_aspect() : (float)fw / fh;
                 dw = cw;
-                dh = (u32)((u64)cw * fh / fw);
+                dh = (u32)(cw / aspect + .5f);
                 if (dh > ch) {
                     dh = ch;
-                    dw = (u32)((u64)ch * fw / fh);
+                    dw = (u32)(ch * aspect + .5f);
                 }
                 i32 dx = (i32)(cx + (cw - dw) / 2), dy = (i32)(cy + (ch - dh) / 2);
                 VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
@@ -546,6 +548,22 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                     (unsigned long long)(upload_bytes >> 20), (unsigned long long)slow_frames,
                     (unsigned long long)(slowest_ns / 1000000));
                 slow_frames = slowest_ns = 0;
+                {
+                    /* the GPU thread's hot paths, a frame's worth on average */
+                    static u32 epoch_was;
+                    VkHot h = g_vk_hot;
+                    u32 ep = __atomic_load_n(&g_vk_epoch, __ATOMIC_RELAXED);
+                    LOG("vulkan: a frame: %.1f submit epochs; texture binds %.0f from the memo, %.0f looked up; %.0f "
+                        "textures over drawn targets (%.1f entries walked, %.1f targets found); target memory "
+                        "hashed whole %.1f times (%.1f MB), sampled %.1f, known %.1f; index ranges scanned %.0f "
+                        "(%.2f MB), known %.0f\n",
+                        (ep - epoch_was) / 600.0, h.memo_hit / 600.0, h.memo_miss / 600.0, h.take / 600.0,
+                        h.take_walked / 600.0, h.take_found / 600.0, h.mh_full / 600.0,
+                        h.mh_full_bytes / 600.0 / 1048576.0, h.mh_sampled / 600.0, h.mh_kept / 600.0,
+                        h.top_scan / 600.0, h.top_scan_bytes / 600.0 / 1048576.0, h.top_kept / 600.0);
+                    epoch_was = ep;
+                    memset(&g_vk_hot, 0, sizeof g_vk_hot);
+                }
                 LOG("vulkan: programs with branches: %llu structured, %llu in the dispatch loop\n",
                     __atomic_load_n(&g_shader_flow_structured, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_shader_flow_loops, __ATOMIC_RELAXED));
@@ -686,6 +704,14 @@ static void vkr_refresh(void) {
 /* a part of a surface, blitted to RGBA8 and read back: its hash, and a .ppm at path if given */
 static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, u32 transform, const char* path) {
     u64 hash = 1469598103934665603ull;
+    u32 source_w = w, source_h = h;
+    if (inkypaint_display_fill()) {
+        float aspect = inkypaint_display_aspect();
+        if (aspect > (float)w / h)
+            w = (u32)(h * aspect + .5f);
+        else
+            h = (u32)(w / aspect + .5f);
+    }
     /* blit to an RGBA8 image, whatever the target's format, then read that back. sRGB to sRGB, so the bytes stay
        encoded as the display shows them */
     VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -717,7 +743,7 @@ static u64 surf_save(Surf* s, u32 x, u32 y, u32 w, u32 h, u32 transform, const c
     vk_barrier(cb, tmp, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, 0, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .srcOffsets = {{(i32)x, (i32)y, 0}, {(i32)(x + w), (i32)(y + h), 1}},
+                        .srcOffsets = {{(i32)x, (i32)y, 0}, {(i32)(x + source_w), (i32)(y + source_h), 1}},
                         .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                         .dstOffsets = {{0, 0, 0}, {(i32)w, (i32)h, 1}}};
     flip_src(&blit, transform); /* screenshots show the window's transform, offscreen and headless presents too */

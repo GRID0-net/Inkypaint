@@ -18,7 +18,6 @@
 
 /* the folder's path and its NUL, then the identity's bytes as each key hashes them first */
 struct SnxUnitCache {
-    char opt;
     SnxUnitDisk disk; /* the disk's room: snx_disk_room, or a test's */
     /* an object's room on the disk and its write, one unit at a time: two would take the same free bytes */
 #ifdef _WIN32
@@ -79,7 +78,6 @@ SnxUnitCache* snx_unit_cache_open(const char* folder, const SnxUnitIdentity* ide
     }
     identity_size = 8 + strlen(tag) + 8 + 8 + strlen(identity->llvm) + 2 + 8 + strlen(tuning);
     cache = (SnxUnitCache*)snx_alloc(sizeof *cache + folder_size + identity_size);
-    cache->opt = identity->opt;
     cache->disk = snx_disk_room;
 #ifdef _WIN32
     InitializeCriticalSection(&cache->lock);
@@ -278,8 +276,8 @@ static int room(SnxUnitCache* cache, SnxU64 size) {
     return 0;
 }
 
-int snx_unit_cache_object(SnxUnitCache* cache, SnxIr* ir, unsigned char** data, size_t* size, int* reused, char* error,
-                          size_t error_size) {
+int snx_unit_cache_object(SnxUnitCache* cache, SnxIr* ir, char opt, unsigned char** data, size_t* size, int* reused,
+                          char* error, size_t error_size) {
     char key[65], why[512], reason[256], *triple, *cpu, *features, *name, *path;
     LLVMMemoryBufferRef bitcode;
     unsigned char* file;
@@ -290,7 +288,7 @@ int snx_unit_cache_object(SnxUnitCache* cache, SnxIr* ir, unsigned char** data, 
     *size = 0;
     *reused = 0;
     /* snx_ir_object refuses a unit with an instruction no emitter covers, which nothing is looked up for */
-    if (ir->fallbacks) return snx_ir_object(ir, cache->opt, data, size, error, error_size);
+    if (ir->fallbacks) return snx_ir_object(ir, opt, data, size, error, error_size);
     bitcode = LLVMWriteBitcodeToMemoryBuffer(ir->mod);
     triple = LLVMGetTargetMachineTriple(ir->tm);
     cpu = LLVMGetTargetMachineCPU(ir->tm);
@@ -339,7 +337,7 @@ int snx_unit_cache_object(SnxUnitCache* cache, SnxIr* ir, unsigned char** data, 
     else if (snx_path_exists(path))
         snx_error("unit cache: cannot read %s (%s): %s is compiled again", path, reason, unit);
     free(file);
-    rc = snx_ir_object(ir, cache->opt, data, size, error, error_size);
+    rc = snx_ir_object(ir, opt, data, size, error, error_size);
     if (!rc) {
 #ifdef _WIN32
         EnterCriticalSection(&cache->lock);

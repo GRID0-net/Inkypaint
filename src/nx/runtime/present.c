@@ -2,6 +2,7 @@
    Copyright 2026 the ScarletNX contributors */
 /* vi's buffers on the display, and the game's pace: how long vi holds back the game's next buffer */
 #include "nx/runtime/main.h"
+#include "nx/runtime/inkypaint_framerate.h"
 #include "nx/runtime/cheats.h"
 #include "nx/gpu/gpu.h"
 #include "nx/gpu/renderer.h"
@@ -35,7 +36,8 @@ static PMutex g_pace_lock = PMUTEX_INIT;
 static u64 g_pace_last; /* when the frame before was due, 0 before the first */
 
 void present_pace(u32 interval) {
-    int fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
+    int fps = inkypaint_framerate_target();
+    if (!fps) fps = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
     u64 refresh, period, now, next;
     if (!fps || (fps == SNX_FPS_GAME && !interval)) return;
     refresh = 1000000000u / (fps == SNX_FPS_GAME ? (u64)VI_REFRESH_HZ : (u64)fps);

@@ -8,9 +8,11 @@
    A draw reads the 3D engine's registers for its state. Signed viewport scales and coordinate swizzles map the
    guest's position. Window-origin bit 4 controls triangle facing independently of that mapping. */
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "nx/runtime/options.h"
+#include "nx/runtime/inkypaint_display.h"
 #include "nx/gpu/gpu.h"
 #include "nx/gpu/renderer.h"
 #include "nx/gpu/shader/shader.h"
@@ -919,6 +921,7 @@ static void tex_resolve(GpuChannel* ch, u32 handle, TexRes* x) {
         m->adds == __atomic_load_n(&g_pend_any.adds, __ATOMIC_RELAXED) &&
         (m->gw == gw || (!gpu_mem_dirty_since(m->gw, tic_at, 32) && !gpu_mem_dirty_since(m->gw, tsc_at, 32)))) {
         m->gw = gw;
+        g_vk_hot.memo_hit++;
         memcpy(x->tic, m->tic, sizeof x->tic);
         memcpy(x->tsc, m->tsc, sizeof x->tsc);
         if (m->rt) {
@@ -934,6 +937,7 @@ static void tex_resolve(GpuChannel* ch, u32 handle, TexRes* x) {
             return;
         }
     }
+    g_vk_hot.memo_miss++;
     vk_gmem_words(tic_at, x->tic, 8);
     vk_gmem_words(tsc_at, x->tsc, 8);
     x->t = vk_tex_from_tic(x->tic);
@@ -1358,6 +1362,9 @@ void vk_gfx_image_land(void) {
     if (!g_gfx_img_any || g_img_landing) return;
     SNX_ZONE(z, "vk image land");
     vk_lock();
+    /* Citrosis batches texture downloads before waiting. Queue all copies through the existing bounded staging
+       path, then the first image's wait covers the batch instead of draining once for each unqueued image. */
+    if (__atomic_load_n(&g_settings.vulkan_batch_image_readbacks, __ATOMIC_RELAXED)) vk_gfx_image_put_aside();
     g_img_landing = 1;
     while (g_img_count) image_flush_at(0);
     g_img_landing = 0;
@@ -1632,10 +1639,14 @@ static u64 dset_mix(u64 h, u64 v, u64 m) {
     return h ^ (h >> 29);
 }
 static VkDescriptorSet desc_set_cached(VkDescriptorSetLayout layout, DescWrites* d) {
-    static struct {
+    typedef struct {
         u64 h1, h2, frame;
         VkDescriptorSet set;
-    } cache[1u << 14];
+    } CachedSet;
+    static struct {
+        CachedSet way[4];
+        u32 next;
+    } cache[1u << 12];
     const u64 m1 = 0x9E3779B97F4A7C15ull, m2 = 0xC2B2AE3D27D4EB4Full;
     u64 h1 = dset_mix(0x243F6A8885A308D3ull, (u64)(uintptr_t)layout, m1),
         h2 = dset_mix(0x13198A2E03707344ull, (u64)(uintptr_t)layout, m2);
@@ -1660,15 +1671,20 @@ static VkDescriptorSet desc_set_cached(VkDescriptorSetLayout layout, DescWrites*
         }
     }
     u64 frame = vk_frame_id() + 1; /* 0 for an unused slot */
-    typeof(cache[0])* e = &cache[h1 >> 50];
-    if (e->frame == frame && e->h1 == h1 && e->h2 == h2) {
-        g_vk_dset_reused++;
-        return e->set;
+    u32 bucket = (u32)(h1 >> 52), victim = cache[bucket].next;
+    for (u32 i = 0; i < 4; i++) {
+        CachedSet* e = &cache[bucket].way[i];
+        if (e->frame == frame && e->h1 == h1 && e->h2 == h2) {
+            g_vk_dset_reused++;
+            return e->set;
+        }
+        if (e->frame != frame) victim = i;
     }
     VkDescriptorSet set = vk_rec_new_set(layout, d->n, d->w); /* made on the recording thread, before it is bound */
     if (!set) return VK_NULL_HANDLE;
     g_vk_dset_new++;
-    *e = (typeof(cache[0])){h1, h2, frame, set};
+    cache[bucket].way[victim] = (CachedSet){h1, h2, frame, set};
+    cache[bucket].next = (victim + 1) & 3;
     return set;
 }
 static VkDescriptorSet stage_set_(GpuChannel* ch, int stage, VkSh* s, Surf** rt, Surf* zt, u32 n, int* zt_ro,
@@ -1885,6 +1901,7 @@ static struct {
     u32 cb;
     VkPipeline pipe;
     VkPipelineLayout layout; /* the one sets were bound through: another may disturb them */
+    int async_pipeline;
     VkDescriptorSet sets[5];
     u32 fb, cull, front, topo, restart, discard, bias_on, dt, dw, dcmp, dbounds, st;
     VkViewport vp[GUEST_VIEWPORTS];
@@ -2401,7 +2418,7 @@ static int draw_key(const GpuChannel* ch, const DrawShaders* sh, const VkSh* fs,
    The baselines are taken before the bytes are read, as buf_get takes them. One game reads about 1,900 index ranges a
    frame: 256 entries answered 55% of them, and scanning the rest again was a twentieth of a draw's setup */
 static struct {
-    u64 a, n, gw;
+    u64 a, n, gw, cid;
     u32 ws, isz, ri, skip, top;
 } g_top_memo[4096];
 static u32 top_memo_slot(u64 a) { return (u32)((a * 0x9E3779B97F4A7C15ull) >> 52); }
@@ -2420,7 +2437,7 @@ static void draw_indices_prefetch(const GpuChannel* ch, int indexed, u32 first, 
    memory, or under results the GPU hasn't landed. A stream's limit is often the end of a ring the game streams
    vertices through, so its range from the draw's start to the limit was megabytes for a few hundred vertices: one
    game copied 100 to 360 MB a frame that way */
-static u64 draw_last_vertex(GpuChannel* ch, int indexed, u32 first, u32 count, u32 base_vertex) {
+static u64 draw_last_vertex(GpuChannel* ch, int indexed, u32 topology, u32 first, u32 count, u32 base_vertex) {
     const u32* r = ch->r3d;
     u64 top = 0;
     if (!indexed) return (u64)first + count - 1;
@@ -2443,13 +2460,28 @@ static u64 draw_last_vertex(GpuChannel* ch, int indexed, u32 first, u32 count, u
         typeof(g_top_memo[0])* memo = g_top_memo;
         u32 slot = top_memo_slot(a), ws = vk_ww_now();
         u64 gw = gpu_mem_generation();
+        /* Without write tracking the memo can't know memory stayed the same, and every draw's indices were scanned
+           again, a twentieth of one game's GPU thread. The indices the draw reads are fetched here instead of after
+           its streams, where it would fetch them anyway (vk_buf_get_input, for the 16 and 32-bit indices it binds as
+           they are: no quads, and no restart index other than all ones), and the buffer cache's identity of the
+           bytes it gives keys the memo: the same bytes, the same highest index, whatever memory did */
+        u64 cid = 0;
+        if (topology != 7 && isz != 1 && (!r[0x591] || (r[0x592] & ones) == ones)) {
+            VkBuffer b;
+            u64 o;
+            if (vk_buf_get_input(a, n * isz, isz, &b, &o)) cid = vk_buf_content(a, n * isz);
+        }
         const u8* p = gmem_ptr(a, n * isz);
         if (!p) return ~0ull;
         if (memo[slot].a == a && memo[slot].n == n && memo[slot].isz == isz && memo[slot].ri == ri &&
-            memo[slot].skip == skip && !gpu_mem_dirty_since(memo[slot].gw, a, n * isz) &&
-            vk_written_since(p, n * isz, memo[slot].ws) == 0)
+            memo[slot].skip == skip &&
+            ((cid && memo[slot].cid == cid) ||
+             (!gpu_mem_dirty_since(memo[slot].gw, a, n * isz) && vk_written_since(p, n * isz, memo[slot].ws) == 0))) {
             top = memo[slot].top;
-        else {
+            g_vk_hot.top_kept++;
+        } else {
+            g_vk_hot.top_scan++;
+            g_vk_hot.top_scan_bytes += n * isz;
             /* a loop for each size, in signed arithmetic where the indices fit it, which SSE2 makes vector maxima of */
             if (isz == 4) {
                 u32 m = 0;
@@ -2477,6 +2509,7 @@ static u64 draw_last_vertex(GpuChannel* ch, int indexed, u32 first, u32 count, u
             }
             memo[slot].a = a;
             memo[slot].n = n;
+            memo[slot].cid = cid;
             memo[slot].gw = gw;
             memo[slot].ws = ws;
             memo[slot].isz = isz;
@@ -2678,7 +2711,7 @@ retry:
     } vq[33];
     u32 nvq = 0;
     /* each stream up to the last vertex or instance the draw reads, rather than to its limit */
-    u64 last_vertex = k->nbind ? draw_last_vertex(ch, indexed, first, count, base_vertex) : ~0ull;
+    u64 last_vertex = k->nbind ? draw_last_vertex(ch, indexed, topology, first, count, base_vertex) : ~0ull;
     u64 last_instance = (u64)base_instance + instances - 1;
     for (u32 v = 0; v < k->nbind; v++) {
         if (pl->key[v] == ~0u) {
@@ -2990,9 +3023,26 @@ retry:
         memset(&g_dyn, 0, sizeof g_dyn);
         g_dyn.cb = vk_cb_begun();
     }
-    if (fresh || g_dyn.pipe != pipe) {
+    /* Only recurring landscape scene draws and the final UI buffer may be omitted. Offscreen material/lighting
+       generation (including integer BC blocks), postprocess history and data rows feed later consumers, often
+       only once. Their pipelines must complete even while the visible scene compiles asynchronously. */
+    int allow_async = !xfb_on;
+    for (u32 i = 0; i < n; i++)
+        if (rt[i]) {
+            int recurring = (zt && rt[i]->w > rt[i]->h) ||
+                (rt[i]->f.vk == VK_FORMAT_A2B10G10R10_UNORM_PACK32 && rt[i]->w >= 1280 &&
+                 (u64)rt[i]->w * 9 == (u64)rt[i]->h * 16);
+            if (!recurring || rt[i]->layers > 1 || rt[i]->depth3d > 1 || rt[i]->h == 1 || rt[i]->f.is_int)
+                allow_async = 0;
+        }
+    if (zt && (zt->layers > 1 || zt->depth3d > 1)) allow_async = 0;
+    VkSh* stages[] = {vs, tcs, tes, gs, fs};
+    for (u32 i = 0; i < sizeof stages / sizeof *stages; i++)
+        if (stages[i] && (stages[i]->si.gbuf_wmask || stages[i]->si.nimg)) allow_async = 0;
+    if (fresh || g_dyn.pipe != pipe || g_dyn.async_pipeline != allow_async) {
         g_dyn.pipe = pipe;
-        rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        g_dyn.async_pipeline = allow_async;
+        rec_CmdBindGraphicsPipeline(cb, pipe, allow_async);
     }
     if (g_vk.has_feedback_dynamic)
         DYN(fb, fb ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_NONE,
@@ -3024,8 +3074,19 @@ retry:
     }
     VkViewport viewport[GUEST_VIEWPORTS] = {{0}};
     VkRect2D scissor[GUEST_VIEWPORTS] = {{{0}}};
+    float ui_x = 1, ui_y = 1;
+    int ui = g_rp.rt[0] && g_rp.rt[0]->f.vk == VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
+             g_rp.rt[0]->w >= 1280 && g_rp.rt[0]->w * 9 == g_rp.rt[0]->h * 16 &&
+             inkypaint_display_ui_scale(vs ? vs->hash : 0, &ui_x, &ui_y);
     for (u32 i = 0; i < viewports; i++) {
         viewport[i] = vk_render_viewport_at(r, i);
+        float cx = viewport[i].x + viewport[i].width * .5f, cy = viewport[i].y + viewport[i].height * .5f;
+        if (ui) {
+            viewport[i].width *= ui_x;
+            viewport[i].height *= ui_y;
+            viewport[i].x = cx - viewport[i].width * .5f;
+            viewport[i].y = cy - viewport[i].height * .5f;
+        }
         int area = viewport[i].width > 0 && viewport[i].height != 0;
         if (!area) /* An empty guest viewport clips everything. Vulkan still needs a valid transform. */
             viewport[i] = (VkViewport){0, 0, 1, 1, 0, 1};
@@ -3039,6 +3100,12 @@ retry:
                 i32 old_y0 = y0;
                 y0 = clip_height - y1;
                 y1 = clip_height - old_y0;
+            }
+            if (ui) {
+                x0 = (i32)floorf(cx + (x0 - cx) * ui_x);
+                x1 = (i32)ceilf(cx + (x1 - cx) * ui_x);
+                y0 = (i32)floorf(cy + (y0 - cy) * ui_y);
+                y1 = (i32)ceilf(cy + (y1 - cy) * ui_y);
             }
             if (x0 < 0) x0 = 0;
             if (y0 < 0) y0 = 0;

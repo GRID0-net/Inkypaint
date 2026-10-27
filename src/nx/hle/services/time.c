@@ -4,6 +4,9 @@
    errors.h, clocks/standard_steady_clock_core.cpp, src/core/hle/service/glue/time/manager.cpp):
    SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
    SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project (GPL-2.0-or-later) */
+/* ntc task behavior adapted from GRID0-Citrosis's core/hle/service/nim/nim.cpp:
+   Copyright 2026 Eden Emulator Project (GPL-3.0-or-later)
+   Copyright 2018 yuzu Emulator Project (GPL-2.0-or-later). */
 /* time:u, time:a and time:s: the steady clock (the host's monotonic time), the system clocks (the host's time, the
    user's, local, network and ephemeral network clocks all one context), and a time zone of a fixed offset, the
    host's at startup (no daylight saving). The time zone rules the game gets are this file's own: the SDK only hands
@@ -590,4 +593,41 @@ SvcObj* new_time_user(void) {
     SvcObj* o = nn_timesrv_detail_service_IStaticService_new_data(g_hle.time.objs, g_hle.time.obj_next, "time objects");
     ((TimeObj*)o->data)->read_only = 1;
     return o;
+}
+
+/* ============================================================ ntc */
+/* The network clock already uses host time. Complete immediately, as Citrosis does, but keep the same event
+   across GetFinishNotificationEvent, StartTask and Cancel so a waiter observes each operation. */
+static void ntc_destroy(SvcObj* self) {
+    kobj_unref(&((TimeObj*)self->data)->finished->o);
+}
+static int nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_StartTask(SvcObj* self) {
+    kevent_signal(((TimeObj*)self->data)->finished);
+    R_SUCCEED();
+}
+static int nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_GetFinishNotificationEvent(
+    SvcObj* self, u32* event) {
+    *event = ev_handle(((TimeObj*)self->data)->finished);
+    R_SUCCEED();
+}
+static int nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_Cancel(SvcObj* self) {
+    kevent_clear(((TimeObj*)self->data)->finished);
+    R_SUCCEED();
+}
+static int nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_GetServerTime(SvcObj* self, i64* time) {
+    return nn_timesrv_detail_service_ISystemClock_GetCurrentTime(self, time);
+}
+static int nn_ntc_detail_service_IStaticService_OpenEnsureNetworkClockAvailabilityService(
+    SvcObj* self, u32 mode, u32 priority, SvcObj** service) {
+    SvcObj* o;
+    (void)self, (void)mode, (void)priority;
+    o = nn_ntc_detail_service_IEnsureNetworkClockAvailabilityService_new_data(
+        g_hle.time.objs, g_hle.time.obj_next, "time objects");
+    ((TimeObj*)o->data)->finished = owned_event("ntc clock availability");
+    o->destroy = ntc_destroy;
+    *service = o;
+    R_SUCCEED();
+}
+SvcObj* new_ntc(void) {
+    return nn_ntc_detail_service_IStaticService_new_data(g_hle.time.objs, g_hle.time.obj_next, "time objects");
 }

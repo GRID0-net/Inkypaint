@@ -647,6 +647,112 @@ static void api(const char* method, const char* path, const char* json, Response
         LOG_LIMIT(16, "GRID0+: %s %s: HTTP %d\n", method, path, r->status);
 }
 
+/* ============================================================ BCAT delivery cache */
+/* Manifest paths and SHA-256 validation adapted from GRID0-Citrosis's bcat/backend/grid0_backend.cpp,
+   Copyright 2026 citron Emulator Project, GPL-2.0-or-later. Only safe directory/file components enter paths. */
+static int bcat_name(const char* name) {
+    size_t n = strlen(name);
+    if (!n || n > 31 || !strcmp(name, ".") || !strcmp(name, "..")) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '-' || c == '.')) return 0;
+    }
+    return 1;
+}
+char* grid0_bcat_path(const char* directory, const char* file) {
+    if (!bcat_name(directory) || (file && !bcat_name(file))) return NULL;
+    return file ? snx_format("%sbcat/%s/%s", g_datadir, directory, file) :
+                  snx_format("%sbcat/%s", g_datadir, directory);
+}
+static int bcat_hash(const void* data, size_t size, const char* expected) {
+    unsigned char digest[32];
+    unsigned int length;
+    static const char hex[] = "0123456789abcdef";
+    if (!EVP_Digest(data, size, digest, &length, EVP_sha256(), NULL) || length != 32) return 0;
+    for (unsigned i = 0; i < 32; i++)
+        if (expected[2 * i] != hex[digest[i] >> 4] || expected[2 * i + 1] != hex[digest[i] & 15]) return 0;
+    return 1;
+}
+static int bcat_manifest(const cJSON* directories) {
+    const cJSON *dir, *file;
+    if (!cJSON_IsArray(directories) || cJSON_GetArraySize(directories) > 64) return 0;
+    cJSON_ArrayForEach(dir, directories) {
+        const cJSON* files = cJSON_GetObjectItemCaseSensitive(dir, "files");
+        if (!bcat_name(json_text(dir, "name")) || !cJSON_IsArray(files) || cJSON_GetArraySize(files) > 4096) return 0;
+        cJSON_ArrayForEach(file, files) {
+            const char* hash = json_text(file, "sha256");
+            if (!bcat_name(json_text(file, "name")) || strlen(hash) != 64) return 0;
+            for (unsigned i = 0; i < 64; i++)
+                if (!((hash[i] >= '0' && hash[i] <= '9') || (hash[i] >= 'a' && hash[i] <= 'f'))) return 0;
+        }
+    }
+    return 1;
+}
+int grid0_bcat_sync(const char* only_directory) {
+    Response manifest;
+    cJSON *json, *directories, *dir, *file;
+    char path[256];
+    unsigned downloaded = 0, cached = 0, failed = 0;
+    if (!grid0_on()) return 0; /* offline retains the local cache */
+    if (only_directory && !bcat_name(only_directory)) return -1;
+    pm_lock(&g_hle.grid0.bcat_lk);
+    snprintf(path, sizeof path, "/emulator/v1/bcat/%016llx", (unsigned long long)g_hle.kernel.title_id);
+    api("GET", path, NULL, &manifest);
+    json = manifest.status == 200 && manifest.body ? cJSON_Parse(manifest.body) : NULL;
+    directories = cJSON_GetObjectItemCaseSensitive(json, "directories");
+    if (!bcat_manifest(directories)) {
+        WARN("GRID0+: BCAT manifest unavailable or invalid (HTTP %d); keeping cached files\n", manifest.status);
+        free(manifest.body);
+        cJSON_Delete(json);
+        pm_unlock(&g_hle.grid0.bcat_lk);
+        return -1;
+    }
+    cJSON_ArrayForEach(dir, directories) {
+        const char* dn = json_text(dir, "name");
+        char* folder;
+        if (only_directory && strcmp(only_directory, dn)) continue;
+        folder = grid0_bcat_path(dn, NULL);
+        if (!folder || snx_mkdirs(folder)) {
+            free(folder);
+            failed++;
+            continue;
+        }
+        free(folder);
+        cJSON_ArrayForEach(file, cJSON_GetObjectItemCaseSensitive(dir, "files")) {
+            const char *fn = json_text(file, "name"), *hash = json_text(file, "sha256");
+            char* local = grid0_bcat_path(dn, fn);
+            char* temporary = snx_format("%s.part", local);
+            size_t size = 0;
+            void* bytes = snx_read_file(local, &size);
+            if (bytes && bcat_hash(bytes, size, hash)) {
+                cached++;
+            } else {
+                Response response;
+                snprintf(path, sizeof path, "/emulator/v1/bcat/%016llx/%s/%s",
+                         (unsigned long long)g_hle.kernel.title_id, dn, fn);
+                api("GET", path, NULL, &response);
+                if (response.status == 200 && bcat_hash(response.body, response.size, hash) &&
+                    !snx_write_file(temporary, response.body, response.size) && !rename(temporary, local))
+                    downloaded++;
+                else {
+                    failed++;
+                    WARN("GRID0+: BCAT %s/%s failed (HTTP %d); cached file retained\n", dn, fn, response.status);
+                }
+                free(response.body);
+            }
+            free(bytes);
+            free(temporary);
+            free(local);
+        }
+    }
+    LOG("GRID0+: BCAT sync: %u downloaded, %u cached, %u failed\n", downloaded, cached, failed);
+    free(manifest.body);
+    cJSON_Delete(json);
+    pm_unlock(&g_hle.grid0.bcat_lk);
+    return failed ? -1 : 0;
+}
+
 /* a friend of the API's list ({id, nickname, login, state, appId, appField, imageUrl, isFavorite}) into f: 0, or -1 */
 static int parse_friend(const cJSON* j, Grid0Friend* f) {
     const char *id = json_text(j, "id"), *nick = json_text(j, "nickname"), *login = json_text(j, "login");

@@ -15,6 +15,13 @@
 #include <string.h>
 
 static SDL_Gamepad* g_pads[SNX_GAMEPADS];
+/* each pad's sensor readings since the game's last sample (gamepad_sensor_event) */
+typedef struct {
+    float sum[3];
+    int n;
+} SensorSum;
+enum { SUM_MAIN, SUM_LEFT, SUM_RIGHT, SUM_SENSORS };
+static SensorSum g_accel_sum[SNX_GAMEPADS][SUM_SENSORS], g_gyro_sum[SNX_GAMEPADS][SUM_SENSORS];
 static char g_names[SNX_GAMEPADS][64]; /* theirs, for the game's menu, which the renderer draws on its thread */
 static int g_labels[SNX_GAMEPADS][4], g_symmetric[SNX_GAMEPADS]; /* and how its button map screen draws them */
 static unsigned g_held[SNX_GAMEPADS]; /* the controls each holds, a bit each, as last polled */
@@ -296,6 +303,8 @@ void gamepad_close(u32 id) {
         if (g_pads[i] && SDL_GetGamepadID(g_pads[i]) == id) {
             SDL_CloseGamepad(g_pads[i]);
             g_pads[i] = NULL;
+            memset(g_accel_sum[i], 0, sizeof g_accel_sum[i]);
+            memset(g_gyro_sum[i], 0, sizeof g_gyro_sum[i]);
             ui_lock();
             g_names[i][0] = 0;
             ui_unlock();
@@ -406,19 +415,58 @@ void gamepad_state_slot(int slot, u64* buttons, i32 sticks[4]) {
     sticks[3] = up(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY));
     dz(&sticks[2], &sticks[3]);
 }
-static int sample_sensor(SDL_Gamepad* g, SDL_SensorType accel_type, SDL_SensorType gyro_type, PadMotion* out) {
+/* Every sensor reading between two of the game's samples, summed: a pad's IMU reports at 200 to 1000 Hz and the
+   game samples at 60. Taking the latest reading alone (SDL_GetGamepadSensorData) held one instant for a whole frame:
+   a button press's knock, or the rumble it starts, is a vibration of a few milliseconds whose one sample, held,
+   read as a fast turn and a tilt that weren't there, the aim jumping and gravity's correction pulling it back over
+   the next second. The console's own sampling gives the game every reading; the mean over the frame is the turn the
+   frame actually saw (Eden runs its MotionInput on every SDL sensor event for the same reason) */
+void gamepad_sensor_event(u32 id, int type, const float data[3]) {
+    SensorSum* to;
+    int slot, i;
+    for (slot = 0; slot < SNX_GAMEPADS; slot++)
+        if (g_pads[slot] && SDL_GetGamepadID(g_pads[slot]) == id) break;
+    if (slot == SNX_GAMEPADS) return;
+    switch (type) {
+    case SDL_SENSOR_ACCEL: to = &g_accel_sum[slot][SUM_MAIN]; break;
+    case SDL_SENSOR_GYRO: to = &g_gyro_sum[slot][SUM_MAIN]; break;
+    case SDL_SENSOR_ACCEL_L: to = &g_accel_sum[slot][SUM_LEFT]; break;
+    case SDL_SENSOR_GYRO_L: to = &g_gyro_sum[slot][SUM_LEFT]; break;
+    case SDL_SENSOR_ACCEL_R: to = &g_accel_sum[slot][SUM_RIGHT]; break;
+    case SDL_SENSOR_GYRO_R: to = &g_gyro_sum[slot][SUM_RIGHT]; break;
+    default: return;
+    }
+    for (i = 0; i < 3; i++) to->sum[i] += data[i];
+    to->n++;
+}
+/* the frame's mean reading, and the sum started over; the latest one when none came in this frame */
+static int frame_reading(SDL_Gamepad* g, SDL_SensorType type, SensorSum* sum, float out[3]) {
+    int i, ok = 1;
+    if (sum->n > 0)
+        for (i = 0; i < 3; i++) out[i] = sum->sum[i] / (float)sum->n;
+    else
+        ok = SDL_GetGamepadSensorData(g, type, out, 3);
+    memset(sum, 0, sizeof *sum);
+    return ok;
+}
+static int sample_sensor(SDL_Gamepad* g, int slot, int which, SDL_SensorType accel_type, SDL_SensorType gyro_type,
+                         PadMotion* out) {
     float a[3], w[3];
-    if (!SDL_GamepadSensorEnabled(g, accel_type) || !SDL_GamepadSensorEnabled(g, gyro_type) ||
-        !SDL_GetGamepadSensorData(g, accel_type, a, 3) || !SDL_GetGamepadSensorData(g, gyro_type, w, 3))
-        return 0;
+    int have_a, have_w;
+    if (!SDL_GamepadSensorEnabled(g, accel_type) || !SDL_GamepadSensorEnabled(g, gyro_type)) return 0;
+    have_a = frame_reading(g, accel_type, &g_accel_sum[slot][which], a);
+    have_w = frame_reading(g, gyro_type, &g_gyro_sum[slot][which], w);
+    if (!have_a || !have_w) return 0;
     /* SDL acceleration is m/s^2. Horizon uses g, with Y up and Z toward the player. */
     out->acceleration[0] = -a[0] / 9.80665f;
     out->acceleration[1] = a[2] / 9.80665f;
     out->acceleration[2] = -a[1] / 9.80665f;
-    /* SDL gyroscope values are already radians/second. */
-    out->angular_velocity[0] = w[0];
-    out->angular_velocity[1] = -w[2];
-    out->angular_velocity[2] = w[1];
+    /* SDL's gyroscope reads radians a second, the console's revolutions a second (Eden's SDL driver divides by 2 pi
+       the same way): taken as they were, turns were 6.3 times what they are */
+    const float turn = 6.28318530718f;
+    out->angular_velocity[0] = w[0] / turn;
+    out->angular_velocity[1] = -w[2] / turn;
+    out->angular_velocity[2] = w[1] / turn;
     out->valid = 1;
     return 1;
 }
@@ -427,9 +475,9 @@ void gamepad_motion(int slot, PadMotion out[2]) {
     int left, right;
     memset(out, 0, 2 * sizeof *out);
     if (slot < 0 || slot >= SNX_GAMEPADS || !(g = g_pads[slot])) return;
-    left = sample_sensor(g, SDL_SENSOR_ACCEL_L, SDL_SENSOR_GYRO_L, &out[0]);
-    right = sample_sensor(g, SDL_SENSOR_ACCEL_R, SDL_SENSOR_GYRO_R, &out[1]);
-    if (!left && !right) sample_sensor(g, SDL_SENSOR_ACCEL, SDL_SENSOR_GYRO, &out[0]);
+    left = sample_sensor(g, slot, SUM_LEFT, SDL_SENSOR_ACCEL_L, SDL_SENSOR_GYRO_L, &out[0]);
+    right = sample_sensor(g, slot, SUM_RIGHT, SDL_SENSOR_ACCEL_R, SDL_SENSOR_GYRO_R, &out[1]);
+    if (!left && !right) sample_sensor(g, slot, SUM_MAIN, SDL_SENSOR_ACCEL, SDL_SENSOR_GYRO, &out[0]);
 }
 
 void gamepad_state(u64* buttons, i32 sticks[4]) {
@@ -461,22 +509,42 @@ void gamepad_state(u64* buttons, i32 sticks[4]) {
     *buttons = b;
 }
 
-void gamepad_rumble(u32 left, u32 right) {
-    /* each motor as the stronger of the two devices' bands: the heavy one low, the light one high */
-    u32 lo = (left & 0xFFFF) > (right & 0xFFFF) ? left & 0xFFFF : right & 0xFFFF;
-    u32 hi = left >> 16 > right >> 16 ? left >> 16 : right >> 16;
-    int i;
-    /* SDL sends a pad only what changed, and stops it when the time runs out: the game's thread may stop sending */
-    for (i = 0; i < SNX_GAMEPADS; i++)
-        if (g_pads[i])
-            SDL_RumbleGamepad(g_pads[i], (Uint16)(lo * strength(i) / 100), (Uint16)(hi * strength(i) / 100), 100);
+/* A pad with HD rumble (Switch controllers, a DualSense, Valve's): it plays an amplitude as the console's does */
+static int hd_rumble(SDL_Gamepad* g) {
+    SDL_GamepadType t = SDL_GetGamepadType(g);
+    return t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO || t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
+           t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT || t == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR ||
+           t == SDL_GAMEPAD_TYPE_PS5 || SDL_GetGamepadVendor(g) == 0x28DE;
 }
-void gamepad_rumble_slot(int slot, u32 left, u32 right) {
-    u32 lo, hi;
+/* One band of the game's vibration (an amplitude and its softening, 0 to 65535 each, hid.h's PadState.rumble) as a
+   motor's strength, as Eden plays it (emulated_controller.cpp's SetVibration, sdl_driver.cpp, GPL-3.0-or-later): the
+   player's strength first; then a curve that lifts small amplitudes, which an ordinary pad's motors didn't feel, while
+   1.0 stays 1.0 (flatter under 70% strength, none for HD rumble); then softened for the band's frequency. Played as
+   they came, a game's light touches were nothing and its strong ones all the motor had */
+static Uint16 rumble_motor(u32 amplitude, u32 softening, u32 percent, int hd) {
+    float a = (float)amplitude / 65535.0f * (float)percent / 100.0f, factor = hd ? 1.0f : percent > 70 ? 0.35f : 0.5f;
+    float v;
+    if (a > 1.0f) a = 1.0f;
+    if (!(a > 0.0f)) return 0;
+    v = (a + powf(a, factor)) * 0.5f * 65535.0f * (1.0f - (float)softening / 65535.0f);
+    return v >= 65535.0f ? 65535 : (Uint16)v;
+}
+/* each motor as the stronger of the two devices' bands: the heavy one low, the light one high. SDL sends a pad only
+   what changed, and stops it when the time runs out: the game's thread may stop sending */
+static void rumble_play(int slot, u64 left, u64 right) {
+    u32 percent = strength(slot);
+    int hd = hd_rumble(g_pads[slot]);
+    Uint16 ll = rumble_motor((u32)(left & 0xFFFF), (u32)(left >> 32 & 0xFFFF), percent, hd);
+    Uint16 rl = rumble_motor((u32)(right & 0xFFFF), (u32)(right >> 32 & 0xFFFF), percent, hd);
+    Uint16 lh = rumble_motor((u32)(left >> 16 & 0xFFFF), (u32)(left >> 48), percent, hd);
+    Uint16 rh = rumble_motor((u32)(right >> 16 & 0xFFFF), (u32)(right >> 48), percent, hd);
+    SDL_RumbleGamepad(g_pads[slot], ll > rl ? ll : rl, lh > rh ? lh : rh, 100);
+}
+void gamepad_rumble(u64 left, u64 right) {
+    for (int i = 0; i < SNX_GAMEPADS; i++)
+        if (g_pads[i]) rumble_play(i, left, right);
+}
+void gamepad_rumble_slot(int slot, u64 left, u64 right) {
     if (slot < 0 || slot >= SNX_GAMEPADS || !g_pads[slot]) return;
-    lo = (left & 0xFFFF) > (right & 0xFFFF) ? left & 0xFFFF : right & 0xFFFF;
-    hi = left >> 16 > right >> 16 ? left >> 16 : right >> 16;
-    lo = lo * strength(slot) / 100;
-    hi = hi * strength(slot) / 100;
-    SDL_RumbleGamepad(g_pads[slot], (Uint16)lo, (Uint16)hi, 100);
+    rumble_play(slot, left, right);
 }

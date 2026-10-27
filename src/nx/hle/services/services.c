@@ -60,6 +60,7 @@ void svc_core_init(void) {
     nn_settings_ISystemSettingsServer_register(new_setsys);
     nn_timesrv_detail_service_IStaticService_register(new_time);
     svc_register("time:u", new_time_user);
+    nn_ntc_detail_service_IStaticService_register(new_ntc);
     nn_account_IAccountServiceForApplication_register(new_acc);
     /* one interface, two kinds of session (ldr.c) */
     svc_register("ldr:ro", new_ldr);

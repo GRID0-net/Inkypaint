@@ -19,6 +19,8 @@
 #include "nx/hle/services/services_int.h"
 #include "nx/hle/hle.h"
 #include "nx/hle/filesystem/fs.h"
+#include "nx/hle/services/network/grid0.h"
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <stdio.h>
 
@@ -608,7 +610,7 @@ static int nn_nfc_detail_IUser_AttachDeactivateEvent(SvcObj* self, const nn_nfc_
     return nfc_device(self);
 }
 
-/* ============================================================ bcat: synchronized at once, the cache empty */
+/* ============================================================ bcat: verified GRID0+ delivery cache */
 #define BCAT_FAILED_OPEN_ENTITY RC(122, 2)
 #define BCAT_DONE               9 /* nn::bcat::DeliveryCacheProgressStatus */
 
@@ -629,30 +631,34 @@ static int nn_bcat_detail_ipc_IServiceCreator_CreateDeliveryCacheStorageServiceW
     *service = nn_bcat_detail_ipc_IDeliveryCacheStorageService_new();
     R_SUCCEED();
 }
-static int bcat_progress(SvcObj** progress) {
+static int bcat_progress(SvcObj** progress, const char* directory) {
+    int result = grid0_bcat_sync(directory);
     *progress = nn_bcat_detail_ipc_IDeliveryCacheProgressService_new();
+    (*progress)->u[0] = result ? BCAT_FAILED_OPEN_ENTITY : 0;
     R_SUCCEED();
 }
 static int nn_bcat_detail_ipc_IBcatService_RequestSyncDeliveryCache(SvcObj* self, SvcObj** progress) {
     (void)self;
-    return bcat_progress(progress);
+    return bcat_progress(progress, NULL);
 }
 static int nn_bcat_detail_ipc_IBcatService_RequestSyncDeliveryCacheWithDirectoryName(
     SvcObj* self, const nn_bcat_DirectoryName* directory_name, SvcObj** progress) {
-    (void)self, (void)directory_name;
-    return bcat_progress(progress);
+    (void)self;
+    R_UNLESS(memchr(directory_name->v, 0, sizeof directory_name->v), BCAT_FAILED_OPEN_ENTITY);
+    return bcat_progress(progress, (const char*)directory_name->v);
 }
 static int nn_bcat_detail_ipc_IBcatService_RequestSyncDeliveryCacheWithApplicationId(SvcObj* self,
                                                                                     nn_ApplicationId application_id,
                                                                                     u32 unknown, SvcObj** progress) {
     (void)self, (void)application_id, (void)unknown;
-    return bcat_progress(progress);
+    return bcat_progress(progress, NULL);
 }
 static int nn_bcat_detail_ipc_IBcatService_RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName(
     SvcObj* self, nn_ApplicationId application_id, u32 unknown, const nn_bcat_DirectoryName* directory_name,
     SvcObj** progress) {
-    (void)self, (void)application_id, (void)unknown, (void)directory_name;
-    return bcat_progress(progress);
+    (void)self, (void)application_id, (void)unknown;
+    R_UNLESS(memchr(directory_name->v, 0, sizeof directory_name->v), BCAT_FAILED_OPEN_ENTITY);
+    return bcat_progress(progress, (const char*)directory_name->v);
 }
 static int nn_bcat_detail_ipc_IBcatService_GetDeliveryCacheStorageUpdateNotifier(SvcObj* self,
                                                                                nn_ApplicationId application_id,
@@ -677,11 +683,13 @@ static int nn_bcat_detail_ipc_IDeliveryCacheProgressService_GetImpl(SvcObj* self
     (void)self;
     memset(GP(impl.addr), 0, (size_t)impl.size);
     if (impl.size >= 4) gw32(impl.addr, (u32)BCAT_DONE);
+    if (impl.size >= 8) gw32(impl.addr + 4, (u32)self->u[0]);
     R_SUCCEED();
 }
 static int nn_bcat_detail_ipc_IDeliveryCacheStorageService_CreateFileService(SvcObj* self, SvcObj** file) {
     (void)self;
-    *file = nn_bcat_detail_ipc_IDeliveryCacheFileService_new();
+    *file = nn_bcat_detail_ipc_IDeliveryCacheFileService_new_data(
+        g_hle.misc.bcat_files, g_hle.misc.bcat_file_next, "bcat files");
     R_SUCCEED();
 }
 static int nn_bcat_detail_ipc_IDeliveryCacheStorageService_CreateDirectoryService(SvcObj* self, SvcObj** directory) {
@@ -691,8 +699,66 @@ static int nn_bcat_detail_ipc_IDeliveryCacheStorageService_CreateDirectoryServic
 }
 static int nn_bcat_detail_ipc_IDeliveryCacheFileService_Open(SvcObj* self, const nn_bcat_DirectoryName* directory_name,
                                                             const nn_bcat_FileName* file_name) {
-    (void)self, (void)directory_name, (void)file_name;
-    R_THROW(BCAT_FAILED_OPEN_ENTITY);
+    BcatFile* f = self->data;
+    char* path;
+    R_UNLESS(memchr(directory_name->v, 0, sizeof directory_name->v) &&
+             memchr(file_name->v, 0, sizeof file_name->v), BCAT_FAILED_OPEN_ENTITY);
+    path = grid0_bcat_path((const char*)directory_name->v, (const char*)file_name->v);
+    if (!path) R_THROW(BCAT_FAILED_OPEN_ENTITY);
+    FILE* stream = snx_fopen(path, "rb");
+    free(path);
+    R_UNLESS(stream, BCAT_FAILED_OPEN_ENTITY);
+    fclose(stream);
+    memcpy(f->directory, directory_name->v, 32);
+    memcpy(f->file, file_name->v, 32);
+    LOG("bcat: opened %s/%s from delivery cache\n", f->directory, f->file);
+    R_SUCCEED();
+}
+static FILE* bcat_file(SvcObj* self) {
+    BcatFile* f = self->data;
+    char* path = grid0_bcat_path(f->directory, f->file);
+    FILE* stream = path ? snx_fopen(path, "rb") : NULL;
+    free(path);
+    return stream;
+}
+static int nn_bcat_detail_ipc_IDeliveryCacheFileService_Read(SvcObj* self, i64 offset, IpcBuf data, u64* size) {
+    FILE* f;
+    R_UNLESS(offset >= 0 && (!data.size || data.addr), BCAT_FAILED_OPEN_ENTITY);
+    f = bcat_file(self);
+    R_UNLESS(f, BCAT_FAILED_OPEN_ENTITY);
+    i64 n = snx_seek(f, (u64)offset) ? -1 : (i64)fread(GP(data.addr), 1, (size_t)data.size, f);
+    if (ferror(f)) n = -1;
+    fclose(f);
+    R_UNLESS(n >= 0, BCAT_FAILED_OPEN_ENTITY);
+    *size = (u64)n;
+    R_SUCCEED();
+}
+static int nn_bcat_detail_ipc_IDeliveryCacheFileService_GetSize(SvcObj* self, i64* size) {
+    FILE* f = bcat_file(self);
+    R_UNLESS(f, BCAT_FAILED_OPEN_ENTITY);
+    int rc = fseek(f, 0, SEEK_END);
+    long n = rc ? -1 : ftell(f);
+    fclose(f);
+    R_UNLESS(n >= 0, BCAT_FAILED_OPEN_ENTITY);
+    *size = n;
+    R_SUCCEED();
+}
+static int nn_bcat_detail_ipc_IDeliveryCacheFileService_GetDigest(SvcObj* self, nn_bcat_Digest* digest) {
+    FILE* f = bcat_file(self);
+    EVP_MD_CTX* ctx;
+    u8 bytes[4096];
+    unsigned length = 0;
+    size_t n;
+    int ok;
+    R_UNLESS(f, BCAT_FAILED_OPEN_ENTITY);
+    ctx = EVP_MD_CTX_new();
+    ok = ctx && EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+    while (ok && (n = fread(bytes, 1, sizeof bytes, f)) != 0) ok = EVP_DigestUpdate(ctx, bytes, n);
+    ok = ok && !ferror(f) && EVP_DigestFinal_ex(ctx, digest->v, &length) && length == 16;
+    EVP_MD_CTX_free(ctx);
+    fclose(f);
+    R_UNLESS(ok, BCAT_FAILED_OPEN_ENTITY);
+    R_SUCCEED();
 }
 static int nn_bcat_detail_ipc_INotifierService_GetEvent(SvcObj* self, u32* event) {
     (void)self;

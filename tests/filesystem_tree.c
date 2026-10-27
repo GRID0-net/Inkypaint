@@ -426,16 +426,27 @@ static void test_failed_initialization(const char* scratch) {
     char path[FS_TREE_PATH_MAX];
     CHECK(snprintf(path, sizeof path, "%s/hardlinks", scratch) < (int)sizeof path);
     FsTree invalid;
+    /* hardlinked files are indexed readonly (a recompile links a game's RomFS into its data folder) */
     scans_allowed = 1;
-    CHECK(fs_tree_init(&invalid, path) == FS_TREE_INVALID);
+    OK(fs_tree_init(&invalid, path));
     scans_allowed = 0;
-    CHECK(invalid.root == NULL && invalid.base == NULL);
+    pm_lock(&invalid.lock);
+    {
+        FsNode* linked = NULL;
+        OK(fs_tree_lookup(&invalid, NULL, "original.bin", &linked));
+        CHECK(linked->readonly && linked->size == 6);
+        OK(fs_tree_lookup(&invalid, NULL, "alias.bin", &linked));
+        CHECK(linked->readonly && linked->size == 6);
+        CHECK(fs_tree_remove(&invalid, NULL, "alias.bin", 0, 0, 0) == FS_TREE_READONLY);
+    }
+    fs_tree_destroy(&invalid);
+    pm_unlock(&invalid.lock);
     CHECK(snprintf(path, sizeof path, "%s/no-such-directory", scratch) < (int)sizeof path);
     scans_allowed = 1;
     CHECK(fs_tree_init(&invalid, path) != FS_TREE_OK);
     scans_allowed = 0;
     CHECK(invalid.root == NULL && invalid.base == NULL);
-    puts("PASS failed scans discard the index and initial hardlinks are rejected");
+    puts("PASS failed scans discard the index and initial hardlinks are indexed readonly");
 }
 
 /* fs_tree_graft: a folder elsewhere as a readonly child of the data directory (the RomFS of Extract to tmpfs), its

@@ -131,6 +131,7 @@ int main(void) {
         puts("SKIP no pipelines: no opt of this LLVM ran where it was built");
         return 0;
     }
+    g_settings.fast_pipeline = 0; /* LLVM's own -O2 below, with passes cut out of it */
     CHECK(instcombine && settings_llvm_pass(&g_settings, "instcombine", 11) == 1);
     CHECK(settings_llvm_pass(&g_settings, "no-such-pass", 12) == -1);
     for (i = 0; levels[i]; ++i) { /* every pass on: LLVM's own pipeline */
@@ -170,7 +171,24 @@ int main(void) {
     for (i = 0; levels[i]; ++i)
         if (!settings_llvm_pipeline(levels[i])) CHECK(!snx_llvm_tuning(levels[i], error, sizeof error));
     ini_read(instcombine, "1");
+    /* fast_pipeline: -O2 runs the recompile's own list (llvm_tuning.c), which LLVM accepts; the other levels keep
+       LLVM's own; a pass turned off is cut out of it too */
+    g_settings.fast_pipeline = 1;
+    t = snx_llvm_tuning('2', error, sizeof error);
+    CHECK(t && t->pipeline && t->opt == '2' && has_pass(t->pipeline, "inline") && has_pass(t->pipeline, "sroa") &&
+          !has_pass(t->pipeline, "gvn") && !has_pass(t->pipeline, "slp-vectorizer") && runs(t->pipeline));
+    CHECK(t && t->text && strstr(t->text, "pipeline=cgscc(inline)")); /* the unit cache's key changes with it */
+    for (i = 0; levels[i]; ++i)
+        if (levels[i] != '2') {
+            t = snx_llvm_tuning(levels[i], error, sizeof error);
+            CHECK(t && !t->pipeline);
+        }
+    ini_read(instcombine, "0");
+    t = snx_llvm_tuning('2', error, sizeof error);
+    CHECK(t && t->pipeline && !has_pass(t->pipeline, "instcombine") && has_pass(t->pipeline, "sroa") && runs(t->pipeline));
+    ini_read(instcombine, "1");
+    g_settings.fast_pipeline = 0;
     if (failures) return 1;
-    puts("PASS LLVM Internals cut passes out of LLVM's pipelines, which LLVM still runs");
+    puts("PASS LLVM Internals cut passes out of LLVM's pipelines, which LLVM still runs; -O2's own list runs");
     return 0;
 }

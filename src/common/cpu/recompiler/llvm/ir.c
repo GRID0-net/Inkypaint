@@ -427,7 +427,9 @@ int snx_ir_module_object(SnxIr* ir, LLVMModuleRef module, char opt, unsigned cha
     sprintf(pipeline, "default<O%c>", opt == 's' || opt == 'z' ? '2' : opt);
     options = LLVMCreatePassBuilderOptions();
     if (ir->tuning && ir->tuning->builder) ir->tuning->builder(options);
-    failure = LLVMRunPasses(module, ir->tuning && ir->tuning->pipeline ? ir->tuning->pipeline : pipeline, ir->tm, options);
+    failure = LLVMRunPasses(module,
+                            ir->tuning && ir->tuning->pipeline && ir->tuning->opt == opt ? ir->tuning->pipeline : pipeline,
+                            ir->tm, options);
     LLVMDisposePassBuilderOptions(options);
     if (failure) {
         message = LLVMGetErrorMessage(failure);

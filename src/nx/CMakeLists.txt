@@ -33,9 +33,9 @@ function(snx_component name)
     target_link_libraries(snx_${name} PUBLIC snx_nx_flags)
 endfunction()
 
-snx_component(core runtime/main.c runtime/arm.c runtime/loader.c runtime/rtapi.c runtime/clock.c runtime/crash.c runtime/options.c
+snx_component(core runtime/main.c runtime/maintenance.c runtime/arm.c runtime/loader.c runtime/rtapi.c runtime/clock.c runtime/crash.c runtime/options.c
               runtime/startup.c runtime/gdbstub.c runtime/present.c runtime/guest_jit.c
-              runtime/cheats.c)
+              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c)
 target_link_libraries(snx_core PRIVATE snx_driver snx_lz4 snx_build_info)
 target_link_libraries(snx_core PUBLIC snx_settings_runtime) # the game's .ini's tables (cmake/settings.cmake)
 if(APPLE)
@@ -98,6 +98,25 @@ snx_component(platform ${platform})
 
 snx_component(shader gpu/shader/shader.c gpu/shader/decode.c gpu/shader/corpus.c gpu/shader/shipped.c
                      gpu/shader/spirv_translate.c gpu/shader/spirv_compute.c gpu/shader/structure.c)
+# Shader cache compatibility follows GPU source and compiler inputs, not the executable's ad-hoc signature or
+# unrelated launcher/runtime edits. Track contents as configure dependencies so an edit regenerates the key.
+file(GLOB_RECURSE snx_shader_cache_sources CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.comp" "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.glsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.def"
+    "${PROJECT_SOURCE_DIR}/src/common/utilities/spirv*.c"
+    "${PROJECT_SOURCE_DIR}/src/common/utilities/spirv*.h")
+list(APPEND snx_shader_cache_sources "${PROJECT_SOURCE_DIR}/src/common/cpu/aarch64/cpu.h"
+     "${PROJECT_SOURCE_DIR}/tools/shaderdec/shaderdec.c" "${CMAKE_CURRENT_LIST_FILE}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${snx_shader_cache_sources})
+set(snx_shader_cache_inputs "2;${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_C_FLAGS};${CMAKE_C_FLAGS_DEBUG};${CMAKE_C_FLAGS_RELEASE};${CMAKE_C_FLAGS_RELWITHDEBINFO};${CMAKE_BUILD_TYPE};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR}")
+foreach(snx_shader_cache_source IN LISTS snx_shader_cache_sources)
+    file(SHA256 "${snx_shader_cache_source}" snx_shader_cache_hash)
+    string(APPEND snx_shader_cache_inputs ";${snx_shader_cache_hash}")
+endforeach()
+string(SHA256 snx_shader_cache_key "${snx_shader_cache_inputs}")
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/nx/gpu/vk/shader_cache_build.h"
+     CONTENT "#define SNX_SHADER_CACHE_BUILD \"@snx_shader_cache_key@\"\n" @ONLY)
 # the opcode enum and decoder, generated from gpu/shader/maxwell_opcodes.def
 include("${PROJECT_SOURCE_DIR}/cmake/shaderdec.cmake")
 snx_shaderdec(snx_shader)
@@ -112,6 +131,7 @@ snx_component(vk gpu/vk/renderer.c gpu/vk/device.c gpu/vk/cmd.c gpu/vk/record.c 
 # (gpu/video/vic_compose.glsl)
 include("${PROJECT_SOURCE_DIR}/cmake/glsl.cmake")
 target_link_libraries(snx_vk PUBLIC snx_xxhash) # vk_hash (gpu/vk/cmd.c)
+target_include_directories(snx_vk PRIVATE "${CMAKE_BINARY_DIR}/generated")
 snx_glsl_spirv(snx_vk SOURCE gpu/texture/astc.comp NAME astc_spv HEADER nx/gpu/texture/astc_spv.h)
 snx_glsl_spirv(snx_vk SOURCE gpu/texture/blocklinear.comp NAME blocklinear_spv HEADER nx/gpu/texture/blocklinear_spv.h)
 snx_glsl_spirv(snx_vk SOURCE gpu/texture/texconv.comp NAME texconv_spv HEADER nx/gpu/texture/texconv_spv.h)
@@ -173,6 +193,17 @@ if(WIN32)
     target_sources(scarletnx PRIVATE "${CMAKE_SOURCE_DIR}/src/common/platform/runtime.rc")
     target_link_options(scarletnx PRIVATE -static)
     target_link_options(scarletnx PRIVATE -mwindows)
+    # C++'s new and delete through mimalloc where the sysroot has it (scripts/windows-deps.py): LLVM's allocations,
+    # one compile a thread, which the Windows heap makes take turns (runtime/platform/alloc_win32.cpp)
+    find_library(SNX_MIMALLOC NAMES libmimalloc.a)
+    find_path(SNX_MIMALLOC_INCLUDE mimalloc-new-delete.h)
+    if(SNX_MIMALLOC AND SNX_MIMALLOC_INCLUDE)
+        # its header is in the sysroot's include folder, which the compiler searches already: naming it again would put
+        # it before libc++'s own
+        target_sources(scarletnx PRIVATE runtime/platform/alloc_win32.cpp)
+        target_link_libraries(scarletnx PRIVATE "${SNX_MIMALLOC}" bcrypt psapi)
+        message(STATUS "Windows: C++ allocations through mimalloc (${SNX_MIMALLOC})")
+    endif()
 else()
     # No -rdynamic: the game module gets the runtime through RtAPI and imports nothing from it, and exporting every
     # global would let a library loaded later (a GPU driver) bind its own symbols to ours by name

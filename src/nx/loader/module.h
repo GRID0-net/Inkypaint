@@ -11,6 +11,7 @@
 typedef struct {
     const char* title;
     size_t chunk_instrs; /* instructions per unit, 0 for SNX_CHUNK_INSTRUCTIONS */
+    size_t big_function; /* a function of more instructions is a unit of its own at O1 (the setting big_function), 0 never */
     int interp_only, quiet, hook_direct_calls;
     const SnxU64* hints; /* guest addresses a run found code at (the game's .hints file) */
     size_t hint_count;

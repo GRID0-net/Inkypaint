@@ -83,6 +83,12 @@ typedef struct {
     time_t iface_when;
     int iface_have;
     SnxNetInterface iface;
+    /* lan_adapter's: the adapters the game's broadcasts go out on (one, or every one with lan_adapter=all), the
+       spec they were found by, and whether a missing adapter was said */
+    SnxNetInterface lan[16];
+    int nlan;
+    char lan_spec[64];
+    int lan_missing_said;
     /* bsd_set_bind_address's: whether it is set, the console's address and its subnet's broadcast address */
     PMutex bind_lk;
     int bind_set;
@@ -196,6 +202,7 @@ typedef struct Grid0Image {
 } Grid0Image;
 typedef struct {
     PMutex lk;        /* everything below */
+    PMutex bcat_lk;   /* serialize verified delivery-cache updates */
     PMutex sign_lk;   /* one sign-in at a time, held across its request */
     PCond cv;         /* the worker's wakeups, and fetches finished */
     int on;           /* grid0=1 with a user and a password */

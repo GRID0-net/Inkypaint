@@ -32,6 +32,10 @@ size_t grid0_id_token(char* out, size_t size);
 /* the signed-in account's network service account id (the token's subject), 0 without one */
 uint64_t grid0_account_id(void);
 
+/* ---- BCAT delivery data (news and schedules): safe local cache paths, and a verified API sync. */
+char* grid0_bcat_path(const char* directory, const char* file); /* caller frees, NULL for unsafe names */
+int grid0_bcat_sync(const char* directory); /* NULL syncs all directories; -1 keeps the old cache on failure */
+
 /* ---- friends (friends.c) */
 typedef struct Grid0Friend Grid0Friend;
 /* the cached friend list, refreshed in the background when stale: up to max into out, the count returned. wait_ms > 0

@@ -31,6 +31,7 @@ void hle_init(void) {
     pm_init(&g_hle.ssl.init_lk);
     pm_init(&g_hle.grid0.lk);
     pm_init(&g_hle.grid0.sign_lk);
+    pm_init(&g_hle.grid0.bcat_lk);
     pm_init(&g_hle.sm.lk);
     /* the kernel: the title until the module names its own, the first thread id, the handle table's empty free list,
        and the process and resource limit objects, which live as long as the program */

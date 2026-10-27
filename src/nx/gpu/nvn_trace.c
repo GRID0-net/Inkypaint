@@ -22,6 +22,8 @@ typedef struct {
     u64 addr, calls;
     GuestFn original;
     int queue_op; /* a queue call: its GPFIFO submissions are counted */
+    u64 flush_callers[16];
+    u32 nflush_callers;
     char name[128];
 } NvProc;
 #define NVN_PROC_SLOTS 1024
@@ -78,6 +80,38 @@ static void proc_trace(CPU* c, u64 entry) {
         if (!p) fatal("nvn: a trace wrapper runs for a function it never registered (%llx)", (unsigned long long)entry);
     }
     __atomic_fetch_add(&p->calls, 1, __ATOMIC_RELAXED);
+    /* NVN user binding 5 is Maxwell constant-buffer slot 8 (three driver-reserved slots precede it). */
+    int uniform = !strcmp(p->name, "nvnCommandBufferBindUniformBuffer") && c->x[1] == 0 && c->x[2] == 5;
+    u64 range = 0;
+    if (!strcmp(p->name, "nvnCommandBufferBindUniformBuffers") && c->x[1] == 0 && c->x[2] <= 5 &&
+        c->x[3] > 5 - c->x[2]) {
+        range = c->x[4] + (5 - c->x[2]) * 16;
+        uniform = range < AS_SIZE - 16 && readable(range) && readable(range + 15);
+    }
+    if (!strcmp(p->name, "nvnBufferFlushMappedRange") || uniform) {
+        u64 caller = c->x[30], fp = c->x[29], chain[4] = {0};
+        for (u32 i = 0; i < 4 && fp < AS_SIZE - 16 && readable(fp) && readable(fp + 15); i++) {
+            chain[i] = gr64(fp + 8);
+            u64 next = gr64(fp);
+            if (next <= fp) break;
+            fp = next;
+        }
+        /* The wrapper one level above NVN is often shared by every uniform block. Include its caller. */
+        u64 key = caller ^ (chain[1] << 17);
+        pm_lock(&procs_lock);
+        u32 i;
+        for (i = 0; i < p->nflush_callers && p->flush_callers[i] != key; i++) {}
+        if (i == p->nflush_callers && i < 16) {
+            p->flush_callers[p->nflush_callers++] = key;
+            LOG("nvn-%s-caller: object=%llx address/offset=%llx bytes=%llu lr=%llx stack=%llx,%llx,%llx,%llx\n",
+                uniform ? "uniform" : "flush", (unsigned long long)c->x[0],
+                (unsigned long long)(uniform && range ? gr64(range) : c->x[uniform ? 3 : 1]),
+                (unsigned long long)(uniform && range ? gr64(range + 8) : c->x[uniform ? 4 : 2]),
+                (unsigned long long)caller, (unsigned long long)chain[0], (unsigned long long)chain[1],
+                (unsigned long long)chain[2], (unsigned long long)chain[3]);
+        }
+        pm_unlock(&procs_lock);
+    }
     if (!p->queue_op) {
         p->original(c, entry);
         return;

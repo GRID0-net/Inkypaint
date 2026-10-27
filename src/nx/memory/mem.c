@@ -722,12 +722,15 @@ void mem_query(u64 addr, MemBlock* out) {
 u64 mem_mapped_run(u64 addr, u64 size) {
     u64 end, lo, lim = addr, run, gen;
     u32 i;
-    int mine = !t_mem_held; /* a crash report's queries come from the thread that holds the lock */
+    int mine;
     if (!size) return 0;
     i = MEM_RUN_SLOT(addr);
     if (__atomic_load_n(&g_unmap_gen, __ATOMIC_ACQUIRE) == t_runs.gen && addr >= t_runs.lo[i] &&
         addr < t_runs.hi[i] && size <= t_runs.hi[i] - addr)
         return size;
+    /* after the kept runs: each thread-local is a call on macOS (_tlv_get_addr), on a path taken millions of times a
+       second. A crash report's queries come from the thread that holds the lock */
+    mine = !t_mem_held;
     if (mine) mem_lock();
     gen = __atomic_load_n(&g_unmap_gen, __ATOMIC_RELAXED);
     if (!g_nblk)

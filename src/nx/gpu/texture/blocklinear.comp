@@ -33,6 +33,8 @@ layout(push_constant) uniform Params {
     uint bl_bias;   /* added to a block linear offset: where the layout's run 0 is in the bound range (wraps) */
     uint lin_bias;  /* where the first linear row is in the bound range */
     uint to_bl;     /* nonzero: linear rows to block linear */
+    uint sanitize;  /* 0 unchanged, 1 binary16, 2 binary32, 3 B10G11R11 unsigned float */
+    uint linear_input; /* sanitize a pitch-linear upload without deswizzling */
 };
 
 /* binding 0 is the side read, binding 1 the side written: block linear first when deswizzling */

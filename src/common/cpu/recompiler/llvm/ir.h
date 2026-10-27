@@ -101,6 +101,7 @@ typedef struct {
    (the runtime JIT's, the recompiler library's) LLVM keeps its own */
 typedef struct SnxIrTuning {
     const char* pipeline;
+    char opt; /* the level pipeline is for: a unit at another (a big function's O1) runs that level's default<O?> */
     void (*builder)(LLVMPassBuilderOptionsRef options);
     void (*machine)(LLVMTargetMachineRef machine);
     /* every value the three above are made from, as text: what the unit cache keys objects with (unit_cache.c) */

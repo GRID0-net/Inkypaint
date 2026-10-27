@@ -13,6 +13,7 @@
 #include "nx/hle/services/nvdrv.h"
 #include "nx/memory/mem.h"
 #include "nx/runtime/platform/log.h"
+#include "nx/runtime/options.h"
 #include "nx/runtime/platform/plat.h"
 #include "nx/gpu/vk/vk.h"
 #include "nx/gpu/vk/pending_pages.h"
@@ -37,6 +38,8 @@ static struct {
     u64 bytes;
 } g_held[3];         /* by VK_LRU_TEX or VK_LRU_RT: the surfaces and their memory */
 static u32 g_parked; /* render targets parked */
+static void drawn_park(Surf* s);   /* out of the drawn list while parked */
+static void drawn_unpark(Surf* s); /* and back in */
 static int lru_kind(const Surf* s) { return s->lru > LRU_AGED ? s->lru - LRU_AGED : s->lru; }
 static void lru_link(Surf* s, int list) {
     s->lru = list;
@@ -464,8 +467,10 @@ static void rt_reload_bl(Surf* s) {
     vk_guest_read(s->gva, sz, p, staged, off); /* what the GPU holds of it copied on the GPU */
     VkCommandBuffer cb = vk_cmd();
     vk_bl_barrier(cb, 1);
+    u32 sanitize = __atomic_load_n(&g_settings.hdr_upload_sanitizer, __ATOMIC_RELAXED) ? vk_hdr_mode(&s->f) : 0;
     for (u32 i = 0; i < moves; i++)
-        if (!vk_bl_move(cb, &m, 0, staged, off + (u64)i * s->layer_size, scratch, (u64)i * pitch * s->h)) return;
+        if (!vk_bl_upload(cb, &m, staged, off + (u64)i * s->layer_size, scratch, (u64)i * pitch * s->h,
+                          sanitize, 0)) return;
     vk_bl_barrier(cb, 0);
     rt_load_copy(cb, s, scratch, 0, pitch, (u64)pitch * s->h);
     rt_loaded(s);
@@ -489,6 +494,34 @@ void vk_rt_reload(u64 gva) {
     }
     if (s->bl) {
         rt_reload_bl(s);
+        return;
+    }
+    u32 sanitize = __atomic_load_n(&g_settings.hdr_upload_sanitizer, __ATOMIC_RELAXED) ? vk_hdr_mode(&s->f) : 0;
+    if (sanitize) {
+        u32 row = s->w * s->f.bpp, pitch = (row + 15) & ~15u;
+        u64 bytes = (u64)pitch * s->h * s->layers, at, cap;
+        VkBuffer staged;
+        vk_render_end();
+        u8* p = vk_stage(bytes, vk_stage_align(), &staged, &at);
+        VkBuffer scratch = vk_bl_scratch(bytes, &cap);
+        if (!p || !scratch) return;
+        if (pitch == s->pitch && s->layer_size == (u64)pitch * s->h)
+            vk_guest_read(gva, bytes, p, staged, at);
+        else
+            for (u32 layer = 0; layer < s->layers; layer++)
+                for (u32 y = 0; y < s->h; y++) {
+                    u64 to = ((u64)layer * s->h + y) * pitch;
+                    vk_guest_read(gva + (u64)layer * s->layer_size + (u64)y * s->pitch, row, p + to,
+                                  staged, at + to);
+                    memset(p + to + row, 0, pitch - row);
+                }
+        VkBlMove m = {pitch, s->h, 0, 0, 0, s->h, 0, s->layers, pitch};
+        VkCommandBuffer cb = vk_cmd();
+        vk_bl_barrier(cb, 1);
+        if (!vk_bl_upload(cb, &m, staged, at, scratch, 0, sanitize, 1)) return;
+        vk_bl_barrier(cb, 0);
+        rt_load_copy(cb, s, scratch, 0, pitch, (u64)pitch * s->h);
+        rt_loaded(s);
         return;
     }
     /* pitch linear: its guest bytes staged as they lie, the copy taking the pitch, when it is whole texels (else a
@@ -918,6 +951,7 @@ static Surf* rt_create_(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth, u32
             vk_rtdump_event("parked: another target takes its address", s);
             rt_pages(s, -1);
             rtx_del(gva);
+            drawn_park(s);
             s->gva = gva | 1ull << 63;
             g_parked++;
             g_vk_surf_epoch++;
@@ -925,6 +959,7 @@ static Surf* rt_create_(u64 gva, u32 w, u32 h, u32 fmt, u32 tile, int depth, u32
     if (parked) {
         vk_rtdump_event("taken out of parking", parked);
         parked->gva = gva;
+        drawn_unpark(parked);
         rtx_add(parked);
         g_parked--;
         g_vk_surf_epoch++;
@@ -1042,13 +1077,15 @@ Surf* vk_rt_for_cpu(u64 cpu_addr, u32 w, u32 h) {
    they were drawn at (drawn_from). Every texture bind looks up a range in it: a game keeping 6,500 targets made a walk
    of the whole list three quarters of the GPU thread, where a binary search finds the range's first */
 static Surf** g_drawn;
+static u64* g_drawn_key; /* their drawn_from: the search reads one array, not each target it passes */
 static int g_ndrawn, g_capdrawn;
+VkHot g_vk_hot;
 /* the first drawn target at or past address a */
 static int drawn_lower(u64 a) {
     int lo = 0, hi = g_ndrawn;
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
-        if (g_drawn[mid]->drawn_from < a)
+        if (g_drawn_key[mid] < a)
             lo = mid + 1;
         else
             hi = mid;
@@ -1056,9 +1093,53 @@ static int drawn_lower(u64 a) {
     return lo;
 }
 /* the GPU pages they started at when listed, so a texture over none of them (most) skips the list: one game looked at
-   each of about 30 for each of 13,000 textures a frame. A target parked since still counts its old page, which only
-   lets the walk run */
+   each of about 30 for each of 13,000 textures a frame */
 static PendPages g_drawn_pages;
+/* s into the list, at its drawn_from */
+static void drawn_insert(Surf* s) {
+    if (g_ndrawn == g_capdrawn) {
+        int cap = g_capdrawn ? g_capdrawn * 2 : 64;
+        Surf** n = realloc(g_drawn, (size_t)cap * sizeof *n);
+        if (!n) return;
+        g_drawn = n;
+        u64* k = realloc(g_drawn_key, (size_t)cap * sizeof *k);
+        if (!k) return;
+        g_drawn_key = k;
+        g_capdrawn = cap;
+    }
+    int at = drawn_lower(s->drawn_from);
+    memmove(&g_drawn[at + 1], &g_drawn[at], (size_t)(g_ndrawn - at) * sizeof *g_drawn);
+    memmove(&g_drawn_key[at + 1], &g_drawn_key[at], (size_t)(g_ndrawn - at) * sizeof *g_drawn_key);
+    g_drawn[at] = s;
+    g_drawn_key[at] = s->drawn_from;
+    g_ndrawn++;
+    s->in_drawn = 1;
+    pend_add_va(&g_drawn_pages, s->drawn_from, 1, 1);
+}
+static void drawn_remove(Surf* s) {
+    int i = drawn_lower(s->drawn_from);
+    while (i < g_ndrawn && g_drawn[i] != s) i++;
+    if (i < g_ndrawn) {
+        memmove(&g_drawn[i], &g_drawn[i + 1], (size_t)(g_ndrawn - i - 1) * sizeof *g_drawn);
+        memmove(&g_drawn_key[i], &g_drawn_key[i + 1], (size_t)(g_ndrawn - i - 1) * sizeof *g_drawn_key);
+        g_ndrawn--;
+    }
+    s->in_drawn = 0;
+    pend_add_va(&g_drawn_pages, s->drawn_from, 1, -1);
+}
+/* A parked target can't be found at its address, so it leaves the list while parked, and comes back taken out of
+   parking with the draw it held (its baseline still says whether memory replaced it). Kept in, a game that parks
+   targets at the same addresses each frame made every texture bind there walk past them */
+static void drawn_park(Surf* s) {
+    if (!s->in_drawn) return;
+    drawn_remove(s);
+    s->drawn_parked = 1;
+}
+static void drawn_unpark(Surf* s) {
+    if (!s->drawn_parked) return;
+    s->drawn_parked = 0;
+    if (s->drawn_from == s->gva) drawn_insert(s);
+}
 /* Read backing memory directly: asking gmem_read to land pending output here could submit a draw mid-setup. A run of
    pages contiguous in host memory is hashed at once, eight bytes at a time (vk_hash) */
 static u64 rt_mem_hash(const Surf* s) {
@@ -1076,6 +1157,57 @@ static u64 rt_mem_hash(const Surf* s) {
     }
     return h;
 }
+/* Without write tracking a target's memory is hashed for its baselines and again for each texture that takes its
+   pixels: whole targets, tens of megabytes a frame, a sixth of the GPU thread in one game. Within the write epoch of
+   the last hash (vk_ww_epoch: what the CPU wrote for a submission is written before it starts) and with no GPU-side
+   write over it since, memory is what it was, and the last hash stands. Memory that hashed the same MH_STABLE times
+   in a row, which a target's mostly does (its draws don't write it, and the CPU seldom does), is sampled between
+   whole hashes MH_FULL_EVERY presents apart, as a texture that settled is: a CPU write the samples miss shows that
+   late. INKYPAINT_RT_SAMPLED=0 hashes it whole each epoch */
+#define MH_STABLE     4
+#define MH_FULL_EVERY 30
+static int rt_sampling(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char* e = getenv("INKYPAINT_RT_SAMPLED");
+        on = !(e && e[0] == '0');
+    }
+    return on;
+}
+static u64 rt_hash_now(Surf* s) {
+    u64 size = rt_bytes(s);
+    u32 ep = vk_ww_epoch();
+    int known = s->mh_valid && s->mh_gva == s->gva;
+    int same = known && !gpu_mem_dirty_since(s->mh_gw, s->gva, size);
+    if (same && s->mh_epoch == ep) {
+        g_vk_hot.mh_kept++;
+        return s->mh_hash;
+    }
+    u64 gw = gpu_mem_generation(); /* before the bytes are read */
+    int sampled = same && s->mh_stable >= MH_STABLE && rt_sampling() &&
+                  (u32)(g_vk_present - s->mh_full) < MH_FULL_EVERY + ((u32)(s->gva >> 12) & 7) &&
+                  !__atomic_load_n(&g_own_any, __ATOMIC_ACQUIRE) && gmem_quiet(s->gva, size) &&
+                  gmem_host(s->gva, size) && vk_sample_hash(s->gva, size) == s->mh_shash;
+    if (sampled)
+        g_vk_hot.mh_sampled++;
+    else {
+        u64 h = rt_mem_hash(s);
+        g_vk_hot.mh_full++;
+        g_vk_hot.mh_full_bytes += size;
+        if (known && h == s->mh_hash) {
+            if (s->mh_stable < 0xFFFF) s->mh_stable++;
+        } else
+            s->mh_stable = 0;
+        s->mh_hash = h;
+        s->mh_full = g_vk_present;
+        if (s->mh_stable >= MH_STABLE) s->mh_shash = vk_sample_hash(s->gva, size);
+    }
+    s->mh_valid = 1;
+    s->mh_gva = s->gva;
+    s->mh_gw = gw;
+    s->mh_epoch = ep;
+    return s->mh_hash;
+}
 void vk_rt_drawn(Surf* s) {
     /* A memory write after the first draw can leave untouched pixels stale even when later draws touch the target.
        Keep that first baseline until the next present instead of scanning the whole target on every draw. */
@@ -1085,26 +1217,14 @@ void vk_rt_drawn(Surf* s) {
            where it is the one answer vk_rt_drawn_fresh has. Hashing every target on its first draw of each present
            took most of the GPU thread (FreeBSD, Linux before 6.7) */
         s->draw_has_hash = vk_written_since(gmem_ptr_untracked(s->gva, size), size, 0) < 0 && s->feeds_tex;
-        if (s->draw_has_hash) s->draw_hash = rt_mem_hash(s);
+        if (s->draw_has_hash) s->draw_hash = rt_hash_now(s);
         s->draw_wseen = vk_ww_now();
         s->draw_gw = gpu_mem_generation();
     }
     s->drawn_at = g_vk_present;
     if (s->in_drawn) return;
-    if (g_ndrawn == g_capdrawn) {
-        int cap = g_capdrawn ? g_capdrawn * 2 : 64;
-        Surf** n = realloc(g_drawn, (size_t)cap * sizeof *n);
-        if (!n) return;
-        g_drawn = n;
-        g_capdrawn = cap;
-    }
     s->drawn_from = s->gva;
-    int at = drawn_lower(s->drawn_from);
-    memmove(&g_drawn[at + 1], &g_drawn[at], (size_t)(g_ndrawn - at) * sizeof *g_drawn);
-    g_drawn[at] = s;
-    g_ndrawn++;
-    s->in_drawn = 1;
-    pend_add_va(&g_drawn_pages, s->drawn_from, 1, 1);
+    drawn_insert(s);
 }
 void vk_rt_drawn_full(Surf* s) {
     s->draw_wseen = 0; /* every pixel was replaced, so earlier memory writes no longer matter */
@@ -1114,7 +1234,7 @@ int vk_rt_drawn_fresh(Surf* s) {
     u64 size = rt_bytes(s);
     if (!s->draw_wseen || s->layout == VK_IMAGE_LAYOUT_UNDEFINED || gpu_mem_dirty_since(s->draw_gw, s->gva, size))
         return 0;
-    if (s->draw_has_hash) return rt_mem_hash(s) == s->draw_hash;
+    if (s->draw_has_hash) return rt_hash_now(s) == s->draw_hash;
     int written = vk_written_since(gmem_ptr_untracked(s->gva, size), size, s->draw_wseen);
     if (written < 0) {
         /* no write tracking, and no baseline yet: the target's pixels are taken this once, as the GPU's writes to its
@@ -1127,17 +1247,16 @@ int vk_rt_drawn_fresh(Surf* s) {
 int vk_rt_drawn_in(u64 lo, u64 hi, Surf** out, int max) {
     int n = 0;
     if (hi <= lo || !pend_hit_va(&g_drawn_pages, lo, hi - lo)) return 0;
-    for (int i = drawn_lower(lo); i < g_ndrawn && g_drawn[i]->drawn_from < hi; i++) {
-        Surf* s = g_drawn[i];
+    int i = drawn_lower(lo), from = i;
+    for (; i < g_ndrawn && g_drawn_key[i] < hi; i++) {
         /* Generated textures may first be sampled several frames after their draw.
            Age does not make guest memory authoritative: tex_take_drawn checks
-           vk_rt_drawn_fresh before copying, and surf_free removes evicted targets. A parked target's address (its
-           drawn_from with the top bit set) is out of every range */
-        if (s->gva == s->drawn_from) {
-            if (n < max) out[n] = s;
-            n++;
-        }
+           vk_rt_drawn_fresh before copying, and surf_free removes evicted targets */
+        if (n < max) out[n] = g_drawn[i];
+        n++;
     }
+    g_vk_hot.take_walked += (u64)(i - from);
+    g_vk_hot.take_found += (u64)n;
     return n;
 }
 
@@ -1152,15 +1271,7 @@ static void surf_free(Surf* s) {
     }
     if (s->is_rt) rt_pages(s, -1);
     if (s->gva >> 63) g_parked--;
-    if (s->in_drawn) {
-        int i = drawn_lower(s->drawn_from);
-        while (i < g_ndrawn && g_drawn[i] != s) i++;
-        if (i < g_ndrawn) {
-            memmove(&g_drawn[i], &g_drawn[i + 1], (size_t)(g_ndrawn - i - 1) * sizeof *g_drawn);
-            g_ndrawn--;
-        }
-        pend_add_va(&g_drawn_pages, s->drawn_from, 1, -1);
-    }
+    if (s->in_drawn) drawn_remove(s);
     for (int i = 0; i < s->nsv; i++) vk_defer_image(VK_NULL_HANDLE, VK_NULL_HANDLE, s->sv[i].v, VK_NULL_HANDLE);
     vk_defer_image(s->img, s->mem, s->att, s->att_linear);
     free(s);

@@ -12,6 +12,7 @@
 /* blocklinear.comp's push constants, member for member */
 typedef struct {
     u32 runs, rows, lin_runs, y0, gob_y0, z0, bh, hmask, bd, dmask, bsh, block_row, slab, bl_bias, lin_bias, to_bl;
+    u32 sanitize, linear_input;
 } BlParams;
 
 static VkDescriptorSetLayout g_bl_ds;
@@ -113,12 +114,17 @@ void vk_bl_barrier(VkCommandBuffer cb, int before) {
     rec_CmdPipelineBarrier2(cb, &d);
 }
 
-int vk_bl_move(VkCommandBuffer cb, const VkBlMove* m, int to_bl, VkBuffer bl, u64 bl_at, VkBuffer lin, u64 lin_at) {
+static int bl_move(VkCommandBuffer cb, const VkBlMove* m, int to_bl, VkBuffer bl, u64 bl_at, VkBuffer lin, u64 lin_at,
+                   u32 sanitize, int linear_input) {
     const VkPhysicalDeviceLimits* lim = &g_vk.props.limits;
     u64 align = lim->minStorageBufferOffsetAlignment < 16 ? 16 : lim->minStorageBufferOffsetAlignment;
     u64 lo, hi;
     if (!m->rows || !m->slices || !m->row_bytes) return 1;
     vk_bl_range(m, &lo, &hi);
+    if (linear_input) {
+        lo = 0;
+        hi = (u64)m->slices * m->rows * m->lin_pitch;
+    }
     /* the bound ranges start on the device's alignment: the biases say where the data is in them */
     u64 bl_off = bl_at & ~(align - 1), lin_off = lin_at & ~(align - 1);
     u64 bl_size = bl_at + (hi - lo) - bl_off, lin_size = lin_at + (u64)m->slices * m->rows * m->lin_pitch - lin_off;
@@ -159,10 +165,34 @@ int vk_bl_move(VkCommandBuffer cb, const VkBlMove* m, int to_bl, VkBuffer bl, u6
                   /* the run at lo is at bl_at: modulo 2^32, as the shader adds it */
                   .bl_bias = (u32)((bl_at - bl_off) >> 4) - (u32)(lo >> 4),
                   .lin_bias = (u32)((lin_at - lin_off) >> 4),
-                  .to_bl = (u32)to_bl};
+                  .to_bl = (u32)to_bl,
+                  .sanitize = sanitize,
+                  .linear_input = (u32)linear_input};
     rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_bl_pipe);
     rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_bl_layout, 0, 1, &set, 0, NULL);
     rec_CmdPushConstants(cb, g_bl_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof p, &p);
     rec_CmdDispatch(cb, gx, gy, m->slices);
     return 1;
+}
+
+int vk_bl_move(VkCommandBuffer cb, const VkBlMove* m, int to_bl, VkBuffer bl, u64 bl_at, VkBuffer lin, u64 lin_at) {
+    return bl_move(cb, m, to_bl, bl, bl_at, lin, lin_at, 0, 0);
+}
+int vk_bl_upload(VkCommandBuffer cb, const VkBlMove* m, VkBuffer in, u64 in_at, VkBuffer out, u64 out_at,
+                 u32 sanitize, int linear_input) {
+    return bl_move(cb, m, 0, in, in_at, out, out_at, sanitize, linear_input);
+}
+u32 vk_hdr_mode(const VkFmt* f) {
+    if (f->depth || f->bw != 1 || f->bh != 1) return 0;
+    switch (f->vk) {
+        case VK_FORMAT_R16_SFLOAT:
+        case VK_FORMAT_R16G16_SFLOAT:
+        case VK_FORMAT_R16G16B16A16_SFLOAT: return 1;
+        case VK_FORMAT_R32_SFLOAT:
+        case VK_FORMAT_R32G32_SFLOAT:
+        case VK_FORMAT_R32G32B32_SFLOAT:
+        case VK_FORMAT_R32G32B32A32_SFLOAT: return 2;
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return 3;
+        default: return 0;
+    }
 }

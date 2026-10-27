@@ -43,6 +43,7 @@ static struct {
     SnxUnitDisk disk;
     SnxU64 disk_free, disk_total;
     int disk_fails;
+    size_t big; /* the build's big_function: 0 none */
 } g_unit_cache;
 
 #define CHECK(x)                                                                                                       \
@@ -110,6 +111,7 @@ static int build(const char* folder, const char* output, SnxU64 limit) {
     options.abi = SNX_ABI;
     options.quiet = 1;
     options.chunk_instrs = 1; /* each function a unit */
+    options.big_function = g_unit_cache.big;
     llvm.output = output;
     llvm.opt = '2';
     llvm.jobs = 1;
@@ -501,6 +503,21 @@ int main(void) {
     CHECK(build("snx-test-unit-cache.file/units", out[2], 0) && !snx_is_file(out[2]));
     CHECK(said("unit cache: cannot make the folder snx-test-unit-cache.file/units", NULL));
     remove("snx-test-unit-cache.file");
+
+    /* a function of more instructions than big_function is a unit of its own at O1, kept under a key of its own (the
+       same IR at O2 is another object), and found again at O1 */
+    {
+        const char* big = "snx-test-unit-cache.big";
+        snx_remove_tree(big);
+        program(1);
+        CHECK(!build(big, out[2], 0) && run(out[2]) == 42 && objects(big, NULL) == 2);
+        g_unit_cache.big = 3; /* f0's four instructions, not f1's two */
+        forget();
+        CHECK(!build(big, out[3], 0) && run(out[3]) == 42 && objects(big, NULL) == 3);
+        CHECK(!build(big, out[4], 0) && run(out[4]) == 42 && objects(big, NULL) == 3 && !g_unit_cache.said_count);
+        g_unit_cache.big = 0;
+        snx_remove_tree(big);
+    }
 
     snx_unit_cache_close(cache);
     free(path_a);

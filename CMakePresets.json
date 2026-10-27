@@ -44,6 +44,22 @@
       }
     },
     {
+      "name": "windows",
+      "displayName": "inkypaint for Windows x86_64, cross-built with this machine's clang and MSYS2's packages",
+      "description": "scripts/windows-deps.py and scripts/windows-toolchain.sh first, .cache/windows/bin on PATH (inkypaint.sh windows does it all)",
+      "inherits": "windows-cross",
+      "cacheVariables": {
+        "LLVM_DIR": "${sourceDir}/.cache/windows/clang64/lib/cmake/llvm",
+        "CMAKE_FIND_ROOT_PATH": "${sourceDir}/.cache/windows/clang64",
+        "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+        "CMAKE_FIND_ROOT_PATH_MODE_LIBRARY": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_INCLUDE": "ONLY",
+        "CMAKE_FIND_ROOT_PATH_MODE_PACKAGE": "ONLY",
+        "SNX_DEPLOY": "OFF",
+        "CMAKE_CXX_SCAN_FOR_MODULES": "OFF"
+      }
+    },
+    {
       "name": "linux-cross-base",
       "hidden": true,
       "inherits": "base",
@@ -230,6 +246,10 @@
     {
       "name": "windows-cross",
       "configurePreset": "windows-cross"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows"
     },
     {
       "name": "linux-ppc64le-cross",

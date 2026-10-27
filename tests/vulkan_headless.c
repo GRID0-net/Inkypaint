@@ -3,6 +3,7 @@
 /* Opt-in integration test: real renderer, no game data. Works with Mesa lavapipe and no display server. */
 #include "common/utilities/common.h"
 #include "nx/runtime/main.h"
+#include "nx/runtime/maintenance.h"
 #include "nx/runtime/options.h"
 #include "nx/gpu/renderer.h"
 #include "nx/gpu/vk/vk.h"
@@ -28,6 +29,58 @@
             return 1;                                                                                                  \
         }                                                                                                              \
     } while (0)
+
+static struct { int entered, release, calls; } maintenance_test;
+static void blocking_cache_save(int at_exit) {
+    (void)at_exit;
+    __atomic_add_fetch(&maintenance_test.calls, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&maintenance_test.entered, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&maintenance_test.release, __ATOMIC_ACQUIRE)) plat_sleep_ns(1000000);
+}
+static int check_maintenance(void) {
+    const Renderer* original = g_renderer;
+    Renderer mock = {0};
+    u64 began;
+    mock.save = blocking_cache_save;
+    g_renderer = &mock;
+    maintenance_request();
+    began = plat_ns();
+    while (!__atomic_load_n(&maintenance_test.entered, __ATOMIC_ACQUIRE) && plat_ns() - began < 2000000000ull)
+        plat_sleep_ns(1000000);
+    CHECK(__atomic_load_n(&maintenance_test.entered, __ATOMIC_ACQUIRE));
+    /* The driver remains blocked while a frontend can enqueue a whole burst and keep polling input. */
+    began = plat_ns();
+    for (int i = 0; i < 1000; i++) maintenance_request();
+    CHECK(plat_ns() - began < 100000000ull);
+    __atomic_store_n(&maintenance_test.release, 1, __ATOMIC_RELEASE);
+    maintenance_stop();
+    CHECK(maintenance_test.calls >= 1 && maintenance_test.calls <= 2);
+    g_renderer = original;
+    return 0;
+}
+
+static u64 mapped_fill(void* data, u64 size, void* arg) {
+    memset(data, 0xa5, (size_t)size);
+    return *(const u64*)arg;
+}
+static int check_mapped_write(const char* root) {
+    char* path = snx_path_join(root, "mapped-write");
+    PFileMap m;
+    u64 used = 17;
+    CHECK(!plat_file_write_mapped(path, 65536, mapped_fill, &used));
+    CHECK(!plat_file_map(&m, path) && m.size == used);
+    for (u64 i = 0; i < m.size; i++) CHECK(m.data[i] == 0xa5);
+    plat_file_unmap(&m);
+    used = 0;
+    CHECK(plat_file_write_mapped(path, 65536, mapped_fill, &used) == -1);
+    CHECK(plat_file_map(&m, path) == -1);
+    used = 65537;
+    CHECK(plat_file_write_mapped(path, 65536, mapped_fill, &used) == -1);
+    CHECK(plat_file_map(&m, path) == -1);
+    CHECK(plat_file_write_mapped(path, 0, mapped_fill, &used) == -1);
+    free(path);
+    return 0;
+}
 
 /* A buffer copied into staging as it is hashed gets the hash vk_hash gives it, which the cache compares with hashes
    taken without a copy, and the bytes: every size around the hash's 32-byte steps, from every alignment */
@@ -322,6 +375,87 @@ static int check_depth_array(void) {
     u32 tic[8] = {0x2B, r[0x3F9], 2u << 21, 2, 15 | (7u << 23), 15 | (2u << 16), 0, 0};
     CHECK(vk_tex_from_tic(tic) == vk_rt_find(r[0x3F9]));
     free(ch);
+    return 0;
+}
+
+/* GPU compression writes integer texels, one BC3 block each. Sampling must take those blocks from the targets,
+   including another array layer and a mip whose target row is padded to a GOB, without updating guest memory. */
+static int check_rendered_bc_blocks(void) {
+    const u64 cpu = HEAP_BASE + 0x700000;
+    float scale_before = g_vk_scale;
+    VkBool32 native = g_vk.feat.textureCompressionBC;
+    for (int mode = 0; mode <= (int)native; mode++) {
+        for (u32 scale = 1; scale <= 2; scale++) {
+            g_vk_scale = (float)scale;
+            u64 gva = 0x6800000 + (u64)(mode * 2 + (int)scale - 1) * 0x10000;
+            gmmu_map(gva, cpu, 0x10000);
+            memset(GP(cpu), 0, 0x10000);
+            g_vk.feat.textureCompressionBC = mode;
+            GpuChannel* ch = calloc(1, sizeof *ch);
+            CHECK(ch);
+            u32* r = ch->r3d;
+            r[0x487] = 1;
+            r[0x204] = 0xC2; /* R32G32B32A32_UINT: the sixteen bytes of a BC3 block */
+            r[0x206] = 1;
+            r[0x207] = 256;
+            u32 expected[8][4];
+            vk_lock();
+            for (u32 layer = 0; layer < 2; layer++)
+                for (u32 level = 0; level < 4; level++) {
+                    u32 k = layer * 4 + level, color = ((layer ^ level) & 1) ? 0x07e0 : 0xf800;
+                    expected[k][0] = 0xffff; /* opaque alpha, all indices select endpoint zero */
+                    expected[k][1] = expected[k][3] = 0;
+                    expected[k][2] = color | color << 16;
+                    r[0x201] = (u32)gva + layer * 2048 + level * 512;
+                    r[0x202] = level ? 4 : 2; /* the small mip's row includes GOB padding */
+                    r[0x203] = level ? 1 : 2;
+                    memcpy(r + 0x360, expected[k], 16);
+                    vk_render_clear(ch, 15 << 2);
+                }
+            vk_render_end();
+            u32 tic[8] = {0x26 | (2u << 7) | (2u << 10) | (2u << 13) | (2u << 16),
+                          (u32)gva,
+                          3u << 21,
+                          3u << 28,
+                          7 | (5u << 23),
+                          7 | (1u << 16),
+                          0,
+                          0x30};
+            Surf* t = vk_tex_from_tic(tic);
+            CHECK(t && t->took_drawn && t->layers == 2 && t->levels == 4);
+            VkBuffer buffer;
+            u8* data = vk_readback_buffer(128, &buffer);
+            CHECK(data);
+            vk_surf_use(vk_cmd(), t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_ACCESS_2_TRANSFER_READ_BIT);
+            VkBufferImageCopy copies[8] = {{0}};
+            for (u32 k = 0; k < 8; k++) {
+                copies[k].bufferOffset = k * 16;
+                copies[k].imageSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, k % 4, k / 4, 1};
+                u32 extent = mode ? (k % 4 < 2 ? 4 : 8u >> (k % 4)) : 1;
+                copies[k].imageExtent = (VkExtent3D){extent, extent, 1};
+            }
+            rec_CmdCopyImageToBuffer(vk_cmd(), t->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 8, copies);
+            vk_finish();
+            vk_readback_ready();
+            for (u32 k = 0; k < 8; k++) {
+                if (mode) {
+                    for (u32 word = 0; word < 4; word++)
+                        CHECK(snx_ld_le32(data + k * 16 + word * 4) == expected[k][word]);
+                } else {
+                    int green = ((k / 4) ^ (k % 4)) & 1;
+                    const u8 color[4] = {green ? 0 : 255, green ? 255 : 0, 0, 255};
+                    CHECK(!memcmp(data + k * 16, color, 4));
+                }
+            }
+            for (u32 i = 0; i < 4096; i++) CHECK(GP(cpu)[i] == 0);
+            vk_unlock();
+            free(ch);
+            printf("rendered BC3 blocks: %s, scale %u, two layers and four mips\n", mode ? "native" : "decoded", scale);
+        }
+    }
+    g_vk.feat.textureCompressionBC = native;
+    g_vk_scale = scale_before;
     return 0;
 }
 
@@ -993,6 +1127,8 @@ int main(int argc, char** argv) {
     const i32 full[4] = {0, 0, 0, 0}, crop[4] = {4, 2, 20, 10};
     char *root = snx_temp_dir(NULL), *shot, *ppm;
     CHECK(root);
+    CHECK(!check_maintenance());
+    CHECK(!check_mapped_write(root));
     CHECK(!snx_startup_options(argc, argv));
     for (int i = 1; i < argc; i++) /* --vk_validation=1 as the runtime takes it: the Khronos validation layer */
         if (!strcmp(argv[i], "--vk_validation=1")) g_settings.vulkan_validation_layer = 1;
@@ -1005,12 +1141,22 @@ int main(int argc, char** argv) {
     g_settings.vulkan_video_decode = 1; /* a Vulkan Video decode queue where the device has one (lavapipe has none) */
     video_init("Headless Vulkan fixture", "");
     CHECK(g_opt_headless && g_renderer_up && g_vk.dev && !g_vk.surface && !g_vk.swapchain && !g_vk.sc_count);
+    {
+        VkDescriptorPoolSize sizes[VK_POOL_TYPES];
+        vk_pool_sizes(sizes, 1024);
+        for (u32 i = 0; i < VK_POOL_TYPES; i++) {
+            CHECK(sizes[i].descriptorCount > 0);
+            if (!g_shader_texture_arrays && sizes[i].type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                CHECK(sizes[i].descriptorCount == SH_MAXTEX * 1024);
+        }
+    }
     CHECK(!check_hash_copy());
     CHECK(!check_staging_overflow());
     CHECK(!check_buffer_texture_rows());
     CHECK(!check_viewport_orientation());
     CHECK(!check_packed_depth());
     CHECK(!check_depth_array());
+    CHECK(!check_rendered_bc_blocks());
     CHECK(!check_srgb_write());
     CHECK(!check_multisample_shader_gate());
     CHECK(!check_direct_spirv());

@@ -22,6 +22,7 @@
 #include "nx/gpu/shipped_pass.h"
 #include "nx/runtime/platform/tracy.h"
 #include "common/utilities/build_info.h"
+#include "nx/gpu/vk/shader_cache_build.h"
 #include "common/utilities/common.h"
 #include <sys/stat.h>
 
@@ -30,9 +31,7 @@
 /* The caches live in shader_cache/ of the game's cache folder (g_cachedir), wherever the runtime was started from */
 static char g_cache_dir[1100], g_pcache_path[1200], g_pcache_tmp[1230];
 static int g_pcache_dirty; /* pipelines made since the cache was last written (atomic: it is saved outside vk_lock) */
-static u64 g_pcache_used;  /* plat_ns when a pipeline last went into the cache (atomic) */
 static void pcache_note(void) {
-    __atomic_store_n(&g_pcache_used, plat_ns(), __ATOMIC_RELAXED);
     __atomic_store_n(&g_pcache_dirty, 1, __ATOMIC_RELAXED);
 }
 #if defined(SNX_TRACY)
@@ -211,18 +210,18 @@ static VkDescriptorType binding_type(u32 i) {
            : i < SNX_VKB_RS  ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                              : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 }
+/* Maximum descriptors actually present in a stage layout. Disabled texture arrays must not reserve hundreds of
+   thousands of unused image/sampler descriptors in every 1024-set pool. */
+static struct {
+    u32 per_set[VK_POOL_TYPES];
+} g_descriptor_pool;
+static const VkDescriptorType descriptor_types[VK_POOL_TYPES] = {
+    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER};
 void vk_pool_sizes(VkDescriptorPoolSize* sz, u32 sets) {
-    static const VkDescriptorType ty[VK_POOL_TYPES] = {
-        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER};
-    int k;
-    for (k = 0; k < VK_POOL_TYPES; k++) {
-        u32 n = 0;
-        u32 i;
-        for (i = 0; i < SNX_VKB_END; i++)
-            if (binding_type(i) == ty[k]) n += (i == SNX_VKB_TEXARRAY || i == SNX_VKB_TEXDEPTH) ? SNX_TEX_ARRAY : 1;
-        sz[k] = (VkDescriptorPoolSize){ty[k], n * sets};
-    }
+    for (u32 k = 0; k < VK_POOL_TYPES; k++)
+        sz[k] = (VkDescriptorPoolSize){descriptor_types[k],
+            (g_descriptor_pool.per_set[k] ? g_descriptor_pool.per_set[k] : 1) * sets};
 }
 
 VkPipelineLayout vk_playout(u32 arrays) {
@@ -302,11 +301,20 @@ void vk_pipeline_init(void) {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = n, .pBindings = b};
             if (!VK_OK(vkCreateDescriptorSetLayout(g_vk.dev, &dl, NULL, &g_vk_dslayout[arrays][s])))
                 fatal("vulkan: cannot create shader descriptor layout");
+            for (u32 k = 0; k < VK_POOL_TYPES; k++) {
+                u32 descriptors = 0;
+                for (u32 j = 0; j < n; j++)
+                    if (b[j].descriptorType == descriptor_types[k]) descriptors += b[j].descriptorCount;
+                if (descriptors > g_descriptor_pool.per_set[k]) g_descriptor_pool.per_set[k] = descriptors;
+            }
         }
     }
     {
         VkDescriptorPoolSize n[VK_POOL_TYPES];
         vk_pool_sizes(n, 1);
+        LOG("vulkan: descriptor pools reserve %u uniform buffers, %u storage buffers, %u samplers, %u images and "
+            "%u texel buffers per set\n", n[0].descriptorCount, n[1].descriptorCount, n[2].descriptorCount,
+            n[3].descriptorCount, n[4].descriptorCount);
         const VkPhysicalDeviceLimits* l = &g_vk.props.limits;
         if (n[0].descriptorCount > l->maxPerStageDescriptorUniformBuffers ||
             n[1].descriptorCount > l->maxPerStageDescriptorStorageBuffers ||
@@ -1189,16 +1197,19 @@ VkPipelineCache vk_pipeline_cache(void) {
     pcache_note();
     return g_pcache;
 }
-/* writes the pipeline cache when pipelines were made since the last write. Asked every few seconds and at exit (the
-   renderer's save), outside vk_lock: the driver synchronizes the cache itself. The driver holds the cache's lock while
-   it copies the cache out, so a pipeline made meanwhile waits for the whole copy, and the copies came every five seconds
-   while pipelines were being made: a pipeline once waited 3.2 s with recording stopped behind it. So the asking every
-   few seconds writes it only after PCACHE_QUIET_NS without a new pipeline, and at exit it is written regardless. Saves
-   one at a time, so the one at exit waits for one in progress to finish its file before the process ends */
-#define PCACHE_QUIET_NS 20000000000ull
+/* Native cache extraction shares the driver's lock with compilation. Save at exit, serialized with any other
+   exiting thread; shader/source records are appended separately as they are discovered. */
 static PMutex g_psave = PMUTEX_INIT;
+static u64 pcache_fill(void* data, u64 size, void* arg) {
+    size_t n = (size_t)size;
+    (void)arg;
+    return vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, data) == VK_SUCCESS ? (u64)n : 0;
+}
 void vk_pipeline_save(int at_exit) {
-    if (!at_exit && plat_ns() - __atomic_load_n(&g_pcache_used, __ATOMIC_RELAXED) < PCACHE_QUIET_NS) return;
+    /* Cache extraction takes the driver's cache lock even on a background thread. A newly encountered pipeline
+       then waits behind the entire gigabyte snapshot. Persist native binaries only after play has stopped; the
+       runtime's shader/source records are already appended as they are discovered. */
+    if (!at_exit) return;
     pm_lock(&g_psave);
     /* the shipped file's shaders the draws found, when that changed: nidx is settled once ship_ready */
     if (__atomic_load_n(&g_pf.ship_ready, __ATOMIC_ACQUIRE) && g_pf.nidx) {
@@ -1214,20 +1225,15 @@ void vk_pipeline_save(int at_exit) {
         return;
     }
     size_t n = 0;
-    void* d = NULL;
-    if (vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, NULL) == VK_SUCCESS && n) d = malloc(n);
-    if (d && vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, d) == VK_SUCCESS) {
-        FILE* f = fopen(g_pcache_tmp, "wb");
-        if (f) {
-            int ok = fwrite(d, 1, n, f) == n;
-            if (fclose(f)) ok = 0;
-            if (ok)
-                plat_replace_file(g_pcache_tmp, g_pcache_path); /* the old cache stays whole until this */
-            else
-                remove(g_pcache_tmp);
-        }
-    }
-    free(d);
+    u64 began = plat_ns();
+    /* MoltenVK caches can exceed a gigabyte. Filling a shared file mapping lets the OS write/reclaim those pages
+       directly instead of allocating and touching another gigabyte of private heap beside the driver's copy. */
+    int ok = vkGetPipelineCacheData(g_vk.dev, g_pcache, &n, NULL) == VK_SUCCESS && n &&
+             !plat_file_write_mapped(g_pcache_tmp, n, pcache_fill, NULL) &&
+             !plat_replace_file(g_pcache_tmp, g_pcache_path);
+    if (!ok) __atomic_store_n(&g_pcache_dirty, 1, __ATOMIC_RELAXED); /* including VK_INCOMPLETE: try on a later save */
+    LOG("vulkan: pipeline cache %s (%zu MiB, %llu ms)\n", ok ? "saved" : "save deferred", n >> 20,
+        (unsigned long long)((plat_ns() - began) / 1000000ull));
     pm_unlock(&g_psave);
 }
 
@@ -1472,14 +1478,11 @@ static void pf_load_pipe(void* ctx, const u64 m[5], const void* key, u32 keylen)
 /* The file's key: whatever changes the SPIR-V translation makes or what a PipeKey means. First its guest part, which
    the PF_SOURCE and PF_PIPE records depend on (pf_open): the device; the features and limits the translator,
    vk_shader_get and pipe_create consult; the sizes of what those records hold whole. Then the rest, which only the
-   SPIR-V and ShaderInfo of the PF_SHADER records depend on: the build (commit, compiler, host), and for a tree with
-   changes, which has one commit for every build of it, the runtime's own file; the driver. The guest part's length
-   goes in *guest */
+   SPIR-V and ShaderInfo of the PF_SHADER records depend on: GPU source/compiler inputs and the driver. Ad-hoc
+   signing and unrelated runtime/launcher rebuilds do not invalidate the shaders. The guest length goes in *guest */
 static void pf_key(char* out, size_t n, size_t* guest) {
     const VkPhysicalDeviceProperties* d = &g_vk.props;
-    const char* commit = snx_build_commit();
-    size_t len = strlen(commit);
-    char exe[64] = "", uuid[33];
+    char uuid[33];
     u32 caps[] = {(u32)g_vk.has_divisor,
                   (u32)g_vk.has_dynamic_stride,
                   (u32)g_vk.has_shader_draw_parameters,
@@ -1504,17 +1507,6 @@ static void pf_key(char* out, size_t n, size_t* guest) {
                   g_vk_buffer_image_slots,
                   d->limits.maxPerStageDescriptorStorageImages,
                   d->limits.maxDescriptorSetStorageImages};
-    /* a tree with changes builds under one commit name: the runtime's own bytes tell those builds apart. Not its
-       modification time, which a copy of the same runtime (each game has one) changes */
-    if (len >= 6 && !strcmp(commit + len - 6, "-dirty")) {
-        char* self = snx_executable("scarletnx");
-        PFileMap m;
-        if (self && !plat_file_map(&m, self) && m.data) {
-            snprintf(exe, sizeof exe, " exe=%016llx", (unsigned long long)vk_hash(m.data, (size_t)m.size));
-            plat_file_unmap(&m);
-        }
-        free(self);
-    }
     for (int i = 0; i < 16; i++) snprintf(uuid + 2 * i, 3, "%02x", d->pipelineCacheUUID[i]);
     int g = snprintf(out, n, "guest=%d gpu=%04x:%04x features=%016llx caps=%016llx sizes=%u,%u,%u,%u;",
                      PF_GUEST_VERSION, d->vendorID, d->deviceID,
@@ -1523,7 +1515,7 @@ static void pf_key(char* out, size_t n, size_t* guest) {
                      (unsigned)sizeof(PfSource), (unsigned)sizeof(PfPipe), (unsigned)sizeof(ShXfb));
     *guest = g > 0 && (size_t)g < n ? (size_t)g : 0;
     if (*guest)
-        snprintf(out + *guest, n - *guest, " %s%s driver=%u api=%u uuid=%s ftz=%d sizes=%u,%u", snx_build_info(), exe,
+        snprintf(out + *guest, n - *guest, " gpu-source=%s driver=%u api=%u uuid=%s ftz=%d sizes=%u,%u", SNX_SHADER_CACHE_BUILD,
                  d->driverVersion, d->apiVersion, uuid, g_vk_ftz, (unsigned)sizeof(ShaderInfo),
                  (unsigned)sizeof(PfShader));
 }

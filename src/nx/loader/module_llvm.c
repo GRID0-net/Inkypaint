@@ -25,6 +25,7 @@ typedef struct {
     unsigned char* object;
     size_t size;
     int reused; /* the object came from the unit cache */
+    char opt;   /* the build's optimization level, or O1 for a function too big for it alone (unit_plan) */
 } Unit;
 
 typedef struct {
@@ -32,6 +33,7 @@ typedef struct {
     const SnxLlvmBuild* build;
     SnxUnitCache* cache; /* NULL: every unit compiled */
     Unit* units;
+    size_t* order; /* the units by their estimated compile time, the longest first (unit_plan) */
     size_t count, next, done;
     int failed;
     char error[1024];
@@ -84,12 +86,17 @@ static int compile_unit(Queue* q, size_t index, char* error, size_t error_size) 
     snx_ir_tune(ir, q->build->tuning);
     snx_ir_stale_checks(ir);
     for (i = u->first; i < u->last; ++i) snx_ir_emit(ir, q->codegen, &q->codegen->functions[i]);
+    if (u->opt != q->build->opt) {
+        /* the unit cache's key is the IR's: the same IR at another level is another object */
+        LLVMValueRef level = LLVMConstInt(ir->t_i32, (unsigned char)u->opt, 0);
+        LLVMAddModuleFlag(ir->mod, LLVMModuleFlagBehaviorOverride, "snx.unit_opt", 12, LLVMValueAsMetadata(level));
+    }
     rc = q->build->keep_ir && save_ir(ir, q->build->keep_ir, name);
     if (rc) snprintf(error, error_size, "cannot save the IR of %s", name);
     if (!rc && q->cache)
-        rc = snx_unit_cache_object(q->cache, ir, &u->object, &u->size, &u->reused, error, error_size);
+        rc = snx_unit_cache_object(q->cache, ir, u->opt, &u->object, &u->size, &u->reused, error, error_size);
     else if (!rc)
-        rc = snx_ir_object(ir, q->build->opt, &u->object, &u->size, error, error_size);
+        rc = snx_ir_object(ir, u->opt, &u->object, &u->size, error, error_size);
     snx_ir_free(ir);
     return rc;
 }
@@ -105,13 +112,18 @@ static void worker(Queue* q) {
             unlock(q);
             return;
         }
-        i = q->next++;
+        i = q->order[q->next++];
         unlock(q);
         error[0] = 0;
         start = snx_seconds();
         rc = compile_unit(q, i, error, sizeof(error));
         seconds = snx_seconds() - start;
         label = rc || q->build->quiet ? NULL : snx_chunk_label(q->codegen, q->units[i].first, q->units[i].last);
+        if (label && q->units[i].opt != q->build->opt) {
+            char* at = snx_format("%s, at O%c", label, q->units[i].opt);
+            free(label);
+            label = at;
+        }
         lock(q);
         ++q->done;
         if (rc && !q->failed) {
@@ -453,6 +465,62 @@ static void report_units(const Queue* q, const SnxLlvmBuild* build, int quiet) {
                (double)trim.removed_bytes / 1000000.0, (double)(trim.held - trim.removed_bytes) / 1000000.0);
 }
 
+/* ---- the units ---- */
+
+/* A unit's compile time as far as the order goes, in instructions. O2's passes take time that grows faster than a
+   function's size: four times the instructions of one giant function took 6.4 to 6.6 times as long, value numbering
+   (GVN) and the SLP vectorizer most of it, where O1 (without either) took 1.8 to 2.9 times as long, a fifth to a
+   third of O2's time */
+static double unit_cost(const SnxCodegen* codegen, const Unit* u) {
+    double cost = 0;
+    size_t i;
+    for (i = u->first; i < u->last; ++i) {
+        double n = (double)codegen->functions[i].count;
+        cost += u->opt == '1' || u->opt == '0' ? n * 0.4 : n * (1.0 + n / 8192.0);
+    }
+    return cost;
+}
+typedef struct {
+    double cost;
+    size_t unit;
+} UnitCost;
+static int by_cost(const void* a, const void* b) {
+    const UnitCost *x = (const UnitCost*)a, *y = (const UnitCost*)b;
+    if (x->cost != y->cost) return x->cost < y->cost ? 1 : -1;
+    return x->unit < y->unit ? -1 : x->unit > y->unit; /* the same plan for the same code */
+}
+/* Units of whole functions in their order, each about limit instructions, but for a function of more than big (0 for
+   none) when the build optimizes past O1: alone, at O1. A handful of giant functions took a quarter of one game's
+   compile, single units of them up to four minutes at O2. The threads take the units the longest first, so the
+   slowest don't start last and leave every other thread waiting at the end (longest processing time first) */
+static void unit_plan(Queue* q, const SnxCodegen* codegen, size_t limit, size_t big, char opt) {
+    size_t first, last, count, i;
+    UnitCost* costs;
+    if (opt == '0' || opt == '1') big = 0;
+    for (first = 0; first < codegen->function_count; first = last) {
+        Unit* u = &q->units[q->count++];
+        last = first;
+        count = 0;
+        if (big && codegen->functions[first].count > big)
+            last = first + 1;
+        else
+            do { count += codegen->functions[last++].count; } while (last < codegen->function_count && count < limit &&
+                                                                    !(big && codegen->functions[last].count > big));
+        u->first = first;
+        u->last = last;
+        u->opt = big && codegen->functions[first].count > big ? '1' : opt;
+    }
+    q->order = (size_t*)snx_alloc((q->count + 1) * sizeof *q->order);
+    costs = (UnitCost*)snx_alloc((q->count + 1) * sizeof *costs);
+    for (i = 0; i < q->count; ++i) {
+        costs[i].cost = unit_cost(codegen, &q->units[i]);
+        costs[i].unit = i;
+    }
+    qsort(costs, q->count, sizeof *costs, by_cost);
+    for (i = 0; i < q->count; ++i) q->order[i] = costs[i].unit;
+    free(costs);
+}
+
 int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, const SnxLlvmBuild* build) {
     SnxCodegen codegen;
     Queue q;
@@ -462,7 +530,7 @@ int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, 
     SnxLinkInput* inputs = NULL;
     SnxLinkOutput linked;
     unsigned char *module_object = NULL, *rtlib_object = NULL;
-    size_t module_size = 0, rtlib_size = 0, first, last, count, limit, i, entry_count = 0, wrapped = 0, n = 0;
+    size_t module_size = 0, rtlib_size = 0, limit, i, entry_count = 0, wrapped = 0, n = 0;
     size_t cache_count = 0, variant_count = 0, export_count = 1;
     const char* exports[2];
     char error[1024], *tmp = NULL;
@@ -500,13 +568,7 @@ int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, 
     limit = options->chunk_instrs ? options->chunk_instrs : SNX_CHUNK_INSTRUCTIONS;
     q.units = (Unit*)snx_alloc((codegen.function_count + 1) * sizeof(*q.units));
     memset(q.units, 0, (codegen.function_count + 1) * sizeof(*q.units));
-    for (first = 0; first < codegen.function_count; first = last) {
-        last = first;
-        count = 0;
-        do { count += codegen.functions[last++].count; } while (last < codegen.function_count && count < limit);
-        q.units[q.count].first = first;
-        q.units[q.count++].last = last;
-    }
+    unit_plan(&q, &codegen, limit, options->big_function, build->opt);
     q.codegen = &codegen;
     q.build = build;
     if (build->unit_cache) {
@@ -616,6 +678,7 @@ int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, 
 done:
     for (i = 0; i < q.count; ++i) free(q.units[i].object);
     free(q.units);
+    free(q.order);
     free(inputs);
     free(module_object);
     free(rtlib_object);

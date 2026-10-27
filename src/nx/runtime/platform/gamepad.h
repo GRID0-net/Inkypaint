@@ -22,13 +22,15 @@ void gamepad_state_slot(int slot, u64* buttons, i32 sticks[4]);
 int gamepad_slot_type(int slot); /* SDL_GamepadType, or SDL_GAMEPAD_TYPE_UNKNOWN */
 int gamepad_slot_connected(int slot);
 u32 gamepad_slot_id(int slot); /* SDL joystick instance ID, 0 for an empty slot */
-void gamepad_motion(int slot, PadMotion out[2]);
+void gamepad_motion(int slot, PadMotion out[2]); /* the mean of the readings since the last call */
+/* one sensor reading (SDL_EVENT_GAMEPAD_SENSOR_UPDATE: the pad's id, its SDL_SensorType, the values) */
+void gamepad_sensor_event(u32 id, int type, const float data[3]);
 /* the HidNpadButton bit one of a gamepad's buttons (an SDL_GamepadButton) is, as the game reads it; 0 for none */
 u64 gamepad_button(u32 id, int button);
-/* legacy combined rumble, played on every open gamepad that can vibrate */
-void gamepad_rumble(u32 left, u32 right);
+/* legacy combined rumble, played on every open gamepad that can vibrate (each device as hid.h's PadState.rumble) */
+void gamepad_rumble(u64 left, u64 right);
 /* one guest player's vibration (hid.h's PadState.rumble), played on that slot's gamepad each frame */
-void gamepad_rumble_slot(int slot, u32 left, u32 right);
+void gamepad_rumble_slot(int slot, u64 left, u64 right);
 /* the settings are g_settings' (settings.txt: swap_a_b, stick_dead_zone, vibration, background_input, pair_joy_cons,
    button_map), kept in the game's .ini; the game's menu changes them under ui_lock. What gamepad_map reads into: */
 typedef struct {

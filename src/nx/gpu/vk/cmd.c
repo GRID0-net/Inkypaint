@@ -58,6 +58,7 @@ typedef struct {
     /* descriptor pools, reset when the frame is reused and kept */
     VkDescriptorPool pool_d[64];
     int npool, ipool; /* pool_d[ipool] is the one allocating; the ones after it are reset and waiting */
+    u32 pool_small; /* consecutive reuses needing fewer pools than the retained peak */
     /* sets allocated ahead, a batch per layout at a time: most draws make a new set, and the driver's allocation cost
        is mostly per call */
     struct {
@@ -294,8 +295,17 @@ static void frame_recycle(Frame* f) {
     dead_free(f);
     g_dead_bytes -= f->dead_bytes;
     f->dead_bytes = 0;
-    vkResetCommandPool(g_vk.dev, f->pool, 0);
-    /* the pools stay, reset: a frame's draws fill several, and making them again every frame costs */
+    vk_rec_reset_pool(f->pool); /* on the recording thread, before the slot's next begin */
+    /* Keep the working set plus one spare, but retire a sustained loading/battle peak after the slot is idle.
+       Completion above makes both resetting and destroying these pools safe. */
+    if (f->npool > f->ipool + 2) {
+        if (++f->pool_small >= 120) {
+            while (f->npool > f->ipool + 2)
+                vkDestroyDescriptorPool(g_vk.dev, f->pool_d[--f->npool], NULL);
+            f->pool_small = 0;
+        }
+    } else
+        f->pool_small = 0;
     for (int i = 0; i < f->npool; i++) vkResetDescriptorPool(g_vk.dev, f->pool_d[i], 0);
     f->ipool = 0;
     memset(f->spare, 0, sizeof f->spare);

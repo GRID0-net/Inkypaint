@@ -724,17 +724,17 @@ int snx_path_within(const char* path, const char* parent) {
     free(b);
     return same;
 }
-static int copy_tree(const char* src, const char* dst, unsigned depth) {
+static int copy_tree(const char* src, const char* dst, unsigned depth, int link) {
     char **names, *a, *b;
     size_t i, n;
     int rc = 0;
     if (depth > 128 || snx_is_link(src) || snx_is_link(dst)) return snx_error("invalid copy tree: %s", src);
-    if (!snx_is_dir(src)) return snx_copy_file(src, dst);
+    if (!snx_is_dir(src)) return link && !snx_path_exists(dst) && !snx_link_file(src, dst) ? 0 : snx_copy_file(src, dst);
     if (snx_mkdirs(dst) || snx_list_dir(src, &names, &n)) return 1;
     for (i = 0; i < n && !rc; ++i) {
         a = snx_path_join(src, names[i]);
         b = snx_path_join(dst, names[i]);
-        rc = copy_tree(a, b, depth + 1);
+        rc = copy_tree(a, b, depth + 1, link);
         free(a);
         free(b);
     }
@@ -743,7 +743,11 @@ static int copy_tree(const char* src, const char* dst, unsigned depth) {
 }
 int snx_copy_tree(const char* src, const char* dst) {
     if (snx_path_within(dst, src)) return snx_error("copy destination is inside source: %s", dst);
-    return copy_tree(src, dst, 0);
+    return copy_tree(src, dst, 0, 0);
+}
+int snx_link_tree(const char* src, const char* dst) {
+    if (snx_path_within(dst, src)) return snx_error("copy destination is inside source: %s", dst);
+    return copy_tree(src, dst, 0, 1);
 }
 int snx_replace(const char* src, const char* dst) {
 #ifdef _WIN32

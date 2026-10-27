@@ -782,6 +782,26 @@ static int run_job(GpuItem* j) {
             u32 sub, m, v;
             int last;
             if (pb_decode(&ch->pb, w[j->word++], &sub, &m, &v, &last)) {
+                /* Syncpoint zero is never allocated by nvdrv. Keep the origin and both copies when a malformed
+                   command stream tries to wait on it: otherwise only the eventual timeout hides the bad header. */
+                if (m == PULLER_SYNCPOINT_OPERATION && !puller_syncpoint_increment(v) &&
+                    !puller_syncpoint_id(v) && ch->puller[PULLER_SYNCPOINT_PAYLOAD]) {
+                    u32 start = j->word > 8 ? j->word - 8 : 0, count = len - start;
+                    u32 live[24];
+                    char context[640];
+                    size_t at = 0;
+                    if (count > 24) count = 24;
+                    gmem_read_raw(entry_addr(job_ent(j)[e]) + (u64)start * 4, live, count * 4);
+                    for (u32 k = 0; k < count && at + 24 < sizeof context; k++)
+                        at += (size_t)snprintf(context + at, sizeof context - at, "%08x/%08x ",
+                                               w[start + k], snx_le32(live[k]));
+                    context[at] = 0;
+                    WARN_LIMIT(4, "gpu: invalid zero-syncpoint wait: job %llu entry %u/%u word %u/%u at %llx "
+                               "(prefetched %u), payload %08x, operation %08x, remaining %u, snapshot/live from %u: %s\n",
+                               (unsigned long long)j->id, e, j->n, j->word, len,
+                               (unsigned long long)entry_addr(job_ent(j)[e]), j->pf,
+                               ch->puller[PULLER_SYNCPOINT_PAYLOAD], v, ch->pb.method_count, start, context);
+                }
                 __atomic_store_n(&g_run_sub, sub, __ATOMIC_RELAXED);
                 __atomic_store_n(&g_run_method, m, __ATOMIC_RELAXED);
                 __atomic_store_n(&g_run_class, ch->sub_class[sub], __ATOMIC_RELAXED);
@@ -1059,7 +1079,7 @@ static int scan_method(GpuScan* s, u32 chan, u64 job, u32* launches, u32 sub, u3
 }
 static void scan_job(GpuScan* s, const GpuItem* j) {
     u32 e, i, launches = 0;
-    if (j->wait_id != ~0u) { /* nothing was fetched: the CPU may write sources before the fence */
+    if (j->wait_id != ~0u) { /* commands are captured, but DMA sources may be produced before the fence */
         s->stopped = 1;
         return;
     }
@@ -1078,21 +1098,20 @@ static void scan_job(GpuScan* s, const GpuItem* j) {
     }
     if (j->pf < j->n) s->stopped = 1; /* a SYNC entry: the rest is fetched when the stream gets there */
 }
-/* a job for the entries, with those before the first SYNC entry fetched now (none when a fence comes first): the
-   guest may reuse its command ring once the ioctl returns */
+/* Capture CPU command storage before the ioctl returns, even when execution waits on a submission fence.
+   GPFIFO SYNC, separately, marks command storage produced by earlier work and defers fetching that segment. */
 #define PREFETCH_MAX_WORDS ((64u << 20) / 4) /* 64 MiB of commands fetched at submission at most */
-static GpuItem* job_new(const void* entries, u32 n, u32 wait_id) {
+static GpuItem* job_new(const void* entries, u32 n) {
     u64 words = 0, size;
     u32 e, pf = 0;
     GpuItem* j;
     const u8* src = (const u8*)entries;
-    if (wait_id == ~0u)
-        for (pf = 0; pf < n; pf++) {
-            u64 en = snx_ld_le64(src + (size_t)pf * 8);
-            if (gpfifo_sync(en)) break; /* SYNC: this entry and the rest wait until the stream gets there */
-            if (words + entry_words(en) > PREFETCH_MAX_WORDS) break; /* the rest is fetched when reached */
-            words += entry_words(en);
-        }
+    for (pf = 0; pf < n; pf++) {
+        u64 en = snx_ld_le64(src + (size_t)pf * 8);
+        if (gpfifo_sync(en)) break; /* SYNC: this entry and the rest wait until the stream gets there */
+        if (words + entry_words(en) > PREFETCH_MAX_WORDS) break; /* the rest is fetched when reached */
+        words += entry_words(en);
+    }
     /* the item, the entries (8-byte aligned after it), their offsets, the words */
     size = sizeof(GpuItem) + (u64)n * 8 + (u64)n * 4 + words * 4;
     if (size > SIZE_MAX || !(j = (GpuItem*)calloc(1, (size_t)size)))
@@ -1119,7 +1138,7 @@ void gpu_submit(const void* entries, u32 n, u32 channel, u32 incs, u32 wait_id, 
     if (channel >= GPU_CHANNELS)
         fatal("gpu: a submission on channel %u, past the %u the GPU has\n", channel, GPU_CHANNELS);
     pm_lock(&g_submit_lk);
-    j = job_new(entries, n, wait_id);
+    j = job_new(entries, n);
     j->chan = channel;
     j->incs = incs;
     j->wait_id = wait_id;

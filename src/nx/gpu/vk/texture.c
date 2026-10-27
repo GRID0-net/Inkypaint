@@ -9,6 +9,7 @@
 #include <string.h>
 #include "nx/gpu/gpu.h"
 #include "nx/gpu/renderer.h"
+#include "nx/runtime/options.h"
 #include "nx/runtime/platform/log.h"
 #include "nx/gpu/vk/vk.h"
 #include "nx/memory/own.h"
@@ -213,6 +214,7 @@ typedef struct {
     u32 conv;     /* converted on the GPU (vk_tc_converts) */
     VkTcShape tc; /* the conversion's shape */
     u32 pitch;    /* the linear rows' pitch: deswizzled, or repacked from a pitch linear level */
+    u32 sanitize;
 } UpLevel;
 /* units rows y to y + n (rows of texels, or of blocks) of slices z to z + nz, in linear rows in_pitch bytes apart at
    in_at in in (staging, or the scratch buffer once the batch's moves are done), converted when they need to be and
@@ -254,7 +256,7 @@ static int up_move(Upload* u, const UpLevel* lv, const VkBlMove* m, VkBuffer sta
     if (!up_reserve(u, lin + (lv->conv ? vk_tc_out_size(&lv->tc, m->rows, m->slices) : 0))) return 0;
     u64 at = up_space(u, lin, bl_lin_align(u->t->f.bpp));
     up_open(u);
-    if (!vk_bl_move(u->cb, m, 0, staged, staged_at, u->scratch, at)) return 0;
+    if (!vk_bl_upload(u->cb, m, staged, staged_at, u->scratch, at, lv->sanitize, 0)) return 0;
     u->moves++;
     return up_rows(u, lv, u->scratch, at, m->lin_pitch, z, m->slices, y, m->rows);
 }
@@ -318,9 +320,11 @@ static int level_upload_bl(Upload* u, const UpLevel* lv, u64 gva, u64 lsz, u32 l
 static int level_upload_pitch(Upload* u, const UpLevel* lv, u64 gva, u64 lsz, u64 band) {
     const Surf* t = u->t;
     u32 th = lv->th, ld = lv->ld, gp = t->pitch;
-    int as_is = gp % (lv->conv ? lv->tc.in_align : 4) == 0 && gp % t->f.bpp == 0;
+    int as_is = gp % (lv->conv ? lv->tc.in_align : 4) == 0 && gp % t->f.bpp == 0 &&
+                (!lv->sanitize || gp % 16 == 0);
     u32 pitch = as_is ? gp : lv->pitch;
     u64 out_row = lv->conv ? vk_tc_out_size(&lv->tc, 1, 1) : 0, per_row = pitch > out_row ? pitch : out_row;
+    if (lv->sanitize) per_row = pitch + out_row;
     u32 n = per_row * th * ld <= band ? th : (u32)(band / per_row ? band / per_row : 1);
     u32 nz = n == th ? ld : 1;
     if (n > th) n = th;
@@ -343,9 +347,18 @@ static int level_upload_pitch(Upload* u, const UpLevel* lv, u64 gva, u64 lsz, u6
                         memset(p + to, 0, pitch);
                         vk_guest_read(gva + o, lv->rowb, p + to, staged, at + to);
                     }
-            if (!up_reserve(u, lv->conv ? vk_tc_out_size(&lv->tc, rows, slices) : 0) ||
-                !up_rows(u, lv, staged, at, pitch, z, slices, y, rows))
-                return 0;
+            u64 converted = lv->conv ? vk_tc_out_size(&lv->tc, rows, slices) : 0;
+            if (!up_reserve(u, converted + (lv->sanitize ? size : 0))) return 0;
+            if (lv->sanitize) {
+                u64 clean = up_space(u, size, bl_lin_align(t->f.bpp));
+                VkBlMove m = {pitch, rows, 0, 0, 0, rows, 0, slices, pitch};
+                up_open(u);
+                if (!vk_bl_upload(u->cb, &m, staged, at, u->scratch, clean, lv->sanitize, 1)) return 0;
+                u->moves++;
+                staged = u->scratch;
+                at = clean;
+            }
+            if (!up_rows(u, lv, staged, at, pitch, z, slices, y, rows)) return 0;
         }
     return 1;
 }
@@ -408,7 +421,10 @@ static int tex_upload_(Surf* t) {
                 u.scratch = VK_NULL_HANDLE; /* astc_rows may have grown the scratch buffer: asked for again */
                 u.cap = 0;
             } else {
-                UpLevel lv = {l, layer, lw, lh, ld, rowb, th, (u32)vk_tc_converts(f)};
+                UpLevel lv = {.level = l, .layer = layer, .lw = lw, .lh = lh, .ld = ld, .rowb = rowb, .th = th,
+                               .conv = (u32)vk_tc_converts(f),
+                               .sanitize = __atomic_load_n(&g_settings.hdr_upload_sanitizer, __ATOMIC_RELAXED)
+                                               ? vk_hdr_mode(f) : 0};
                 u32 align = bl_lin_align(f->bpp);
                 if (lv.conv) {
                     lv.tc = vk_tc_shape(f, lw);
@@ -1183,14 +1199,75 @@ static void copy_layers(VkCommandBuffer cb, Surf* s, Surf* t, u32 l, u32 dst, u3
                      regions, b, VK_FILTER_NEAREST);
 }
 
+/* A game can compress on the GPU by drawing one integer texel per compressed block. Copy those bits through a
+   GPU buffer: the source image's texels are the destination's blocks, including partial blocks at small mips.
+   Formats decoded on upload use the same compute decoder here, with no readback to guest memory. */
+static int copy_blocks(Surf* s, Surf* t, u32 level, u32 layer, u32 count, u32 w, u32 h) {
+    u32 bw = (w + t->f.bw - 1) / t->f.bw, bh = (h + t->f.bh - 1) / t->f.bh;
+    u32 pitch = (bw * t->f.bpp + 15) & ~15u;
+    u64 raw = (u64)pitch * bh * count, cap;
+    int conv = vk_tc_converts(&t->f), scaled = s->sw != s->w || s->sh != s->h;
+    VkTcShape shape = conv ? vk_tc_shape(&t->f, w) : (VkTcShape){0};
+    VkBuffer scratch = vk_bl_scratch(raw + (conv ? vk_tc_out_size(&shape, bh, count) : 0), &cap);
+    if (!scratch) return 0;
+    VmaAllocation mem = VK_NULL_HANDLE;
+    VkImage mid = scaled ? vk_unscaled_image(s, count, &mem) : VK_NULL_HANDLE;
+    if (scaled && !mid) return 0;
+    VkCommandBuffer cb = copy_begin(s, t);
+    VkImage source = s->img;
+    if (scaled) {
+        VkImageSubresourceLayers sub = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, count};
+        VkImageBlit b = {.srcSubresource = sub,
+                         .srcOffsets = {{0, 0, 0}, {(i32)vk_sc(bw), (i32)vk_sc(bh), 1}},
+                         .dstSubresource = sub,
+                         .dstOffsets = {{0, 0, 0}, {(i32)bw, (i32)bh, 1}}};
+        vk_barrier(cb, mid, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_NONE, 0, VK_IMAGE_LAYOUT_UNDEFINED,
+                   VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        rec_CmdBlitImage(cb, s->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mid, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                         &b, VK_FILTER_NEAREST);
+        vk_barrier(cb, mid, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        source = mid;
+    }
+    /* The shared scratch buffer may still be read by a previous copy or decoder. */
+    vk_all_barrier(cb);
+    VkBufferImageCopy from = {.bufferRowLength = pitch / t->f.bpp,
+                              .bufferImageHeight = bh,
+                              .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, count},
+                              .imageExtent = {bw, bh, 1}};
+    rec_CmdCopyImageToBuffer(cb, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, scratch, 1, &from);
+    int ok = 1;
+    if (conv) {
+        vk_bl_barrier(cb, 1);
+        ok = vk_tc_convert(cb, &t->f, w, bh, count, scratch, 0, pitch, scratch, raw);
+        vk_bl_barrier(cb, 0);
+    } else
+        vk_all_barrier(cb);
+    if (ok) {
+        VkBufferImageCopy to = {.bufferOffset = conv ? raw : 0,
+                                .bufferRowLength = conv ? shape.out_texels : pitch / t->f.bpp * t->f.bw,
+                                .bufferImageHeight = conv ? bh * shape.out_rows : bh * t->f.bh,
+                                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, count},
+                                .imageExtent = {w, h, 1}};
+        rec_CmdCopyBufferToImage(cb, scratch, t->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &to);
+    }
+    if (mid) vk_defer_image(mid, mem, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    vk_render_unhoist();
+    return ok;
+}
+
 /* a texture whose layers, levels or 3D slices were drawn as render targets of their own is copied from those targets
    on the GPU: they are never written back to its memory. Only a target matching one subresource (or, layered, the
    layers from one), whose backing memory has not been overwritten since its draw. Generated textures can be first
-   sampled several frames later. Targets are never block compressed: such a texture can't take their texels */
+   sampled several frames later. Integer targets can also hold compressed blocks, one block per target texel */
 static void tex_take_drawn(Surf* t) {
     /* a converted format's texels differ from its host image's, but a depth texture takes its targets' host images
        as they are (the same format, below): D24S8's guest packing is converted only when it is loaded from memory */
-    if (!t || t->is_rt || (t->f.conv && !t->f.depth) || t->f.bw != 1) return;
+    if (!t || t->is_rt) return;
+    int blocks = t->f.bw > 1;
+    if ((t->f.conv && !t->f.depth && !blocks) || (blocks && t->f.conv == VKC_ASTC)) return;
+    g_vk_hot.take++;
     Surf* small[32];
     Surf** d = small;
     u64 stride = t->layer_size;
@@ -1215,8 +1292,9 @@ static void tex_take_drawn(Surf* t) {
             continue;
         /* a blit converts formats where a copy keeps the bits: a scaled target only into a texture of its own format */
         int scaled = s->sw != s->w || s->sh != s->h;
-        if (scaled && (s->f.vk != t->f.vk || !can_blit(t->f.vk))) continue;
+        if (scaled && (blocks ? !can_blit(s->f.vk) : s->f.vk != t->f.vk || !can_blit(t->f.vk))) continue;
         u64 off = s->gva - t->gva;
+        if (blocks && (s->f.bw != 1 || t->type == VK_IMAGE_VIEW_TYPE_3D)) continue;
         if (t->type == VK_IMAGE_VIEW_TYPE_3D) {
             if (t->f.depth) continue;
             /* A layered color target can be sampled as a 3D texture at the same address. Its slices only exist in
@@ -1301,18 +1379,22 @@ static void tex_take_drawn(Surf* t) {
             /* a block-linear level's rows take whole GOBs (64 bytes), so a target drawn as wide as them covers the
                level (a 120-texel depth pyramid level drawn 128 wide, a cube mip narrower than a GOB one GOB wide):
                only its left lw texels are the level's */
-            int padded_row = t->bl && s->bl && s->f.vk == t->f.vk && s->w > lw &&
-                             ((u64)s->w * s->f.bpp + 63) / 64 == ((u64)lw * t->f.bpp + 63) / 64;
-            if (rem == lo && (s->w == lw || padded_row) && s->h == lh) {
+            u32 sw = (lw + t->f.bw - 1) / t->f.bw, sh = (lh + t->f.bh - 1) / t->f.bh;
+            int padded_row = t->bl && s->bl && (blocks || s->f.vk == t->f.vk) && s->w > sw &&
+                             ((u64)s->w * s->f.bpp + 63) / 64 == ((u64)sw * t->f.bpp + 63) / 64;
+            if (rem == lo && (s->w == sw || padded_row) && s->h == sh) {
                 if (!vk_rt_drawn_fresh(s)) break; /* newer guest memory at this address takes precedence */
                 /* a layered target spaced as the texture's layers fills as many of them as it has */
                 u32 count = 1;
                 if (s->layers > 1 && !s->volume && l == 0 && s->layer_size == stride) /* a volume's are GOB slices */
                     count = s->layers < t->layers - layer ? s->layers : t->layers - layer;
-                copy_layers(copy_begin(s, t), s, t, l, layer, count, lw, lh, 0);
+                if (blocks) {
+                    if (!copy_blocks(s, t, l, layer, count, lw, lh)) break;
+                } else
+                    copy_layers(copy_begin(s, t), s, t, l, layer, count, lw, lh, 0);
                 mark_copied(s, t);
                 taken++;
-                vk_render_unhoist();
+                if (!blocks) vk_render_unhoist();
                 break;
             }
             if (!t->bl) break;

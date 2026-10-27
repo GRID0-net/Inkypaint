@@ -91,11 +91,23 @@ static int describe(char* error, size_t error_size) {
     return 0;
 }
 
+/* The recompile's own pipeline for -O2 (the setting fast_pipeline): the inliner, then a pass over each function that
+   makes the guest's registers SSA values (sroa), merges what each block computes twice (early-cse), combines and
+   simplifies, and drops stores a later one replaces. default<O2>'s value numbering, loop passes and vectorizers took
+   twice the compile time, half of it in value numbering and the SLP vectorizer, and the code they made ran no faster:
+   7% slower over five kernels compiled for the console's CPU and recompiled (sorting, a physics step, a bytecode
+   interpreter, a hash table, small calls in a loop), as the generated code keeps guest state in memory those passes
+   can't see through */
+static const char fast_pipeline[] =
+    "cgscc(inline),function(sroa,early-cse<memssa>,instcombine<no-verify-fixpoint>,simplifycfg,dse)";
+
 const struct SnxIrTuning* snx_llvm_tuning(char opt, char* error, size_t error_size) {
     SnxIrTuning* tuning = &g_llvm_tuning.tuning;
     char* pipeline = g_llvm_tuning.pipeline;
-    const char* text = settings_llvm_pipeline(opt);
+    int fast = opt == '2' && g_settings.fast_pipeline;
+    const char* text = fast ? fast_pipeline : settings_llvm_pipeline(opt);
     tuning->pipeline = NULL;
+    tuning->opt = opt;
     tuning->builder = builder;
     tuning->machine = machine;
     tuning->text = NULL;
@@ -126,7 +138,7 @@ const struct SnxIrTuning* snx_llvm_tuning(char opt, char* error, size_t error_si
         }
         pipeline[c.at] = 0;
         /* opt's own text when nothing was cut: default<O?> runs the same, and doesn't depend on the text */
-        if (strcmp(pipeline, text)) tuning->pipeline = pipeline;
+        if (fast || strcmp(pipeline, text)) tuning->pipeline = pipeline;
     }
     return describe(error, error_size) ? NULL : tuning;
 }

@@ -18,6 +18,8 @@
    the direction picks which side is read with two selects of offsets computed either way, so both directions are
    the same instructions: one shader and one pipeline, not two. */
 
+#include "hdr.glsl"
+
 void main() {
     uint k = gl_LocalInvocationID.x;
     uint run = ((gl_WorkGroupID.x * 2u + gl_LocalInvocationID.y) << 2) | ((k >> 1) & 1u) | ((k >> 3) & 2u);
@@ -30,5 +32,12 @@ void main() {
     uint gob = ((z & dmask) << bh) | (gy & hmask);
     uint bl = bl_bias + (z >> bd) * slab + (gy >> bh) * block_row + ((run >> 2) << bsh) + (gob << 5) + k;
     uint lin = lin_bias + (gl_WorkGroupID.z * rows + y) * lin_runs + run;
-    dst[to_bl != 0u ? bl : lin] = src[to_bl != 0u ? lin : bl];
+    uvec4 value = src[linear_input != 0u ? lin - lin_bias + bl_bias : to_bl != 0u ? lin : bl];
+    if (sanitize != 0u) {
+        value.x = hdr_word(value.x, sanitize);
+        value.y = hdr_word(value.y, sanitize);
+        value.z = hdr_word(value.z, sanitize);
+        value.w = hdr_word(value.w, sanitize);
+    }
+    dst[to_bl != 0u ? bl : lin] = value;
 }

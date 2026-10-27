@@ -106,6 +106,18 @@ setting Fullscreen
     words Off|On
     help 1 = starts fullscreen, except in timed test runs. -f or --fullscreen=0 sets it for one run, and F11 or
     help Alt+Enter switches while the game runs without changing it
+setting Window width
+    key window_width
+    int 320 8192
+    default 1280
+    startup
+    help Initial window width in desktop coordinates; the window can be resized while playing
+setting Window height
+    key window_height
+    int 180 8192
+    default 720
+    startup
+    help Initial window height in desktop coordinates; fullscreen uses the display's size
 setting Language
     key language
     int 0 17
@@ -132,6 +144,31 @@ setting Showcase corner
     help The corner showcase draws in: tl top left, tr top right, bl bottom left, br bottom right
 
 table g_graphics_ini
+setting Adapt to display
+    key adapt_aspect
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help Expand the world to the window's aspect ratio, with the UI centered in a 16:9 area
+setting Aspect ratio override
+    key aspect_ratio
+    float 0 4
+    default 0
+    help 0 = follow the window; a positive width/height ratio overrides it (2.333333 for 21:9)
+setting HDR upload sanitizer
+    key hdr_upload_sanitize
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help Clear NaN and infinity components from guest float texture uploads before HDR processing
+setting Vulkan batch image readbacks
+    key vk_batch_image_readbacks
+    int 0 1
+    default 1
+    words Off|On
+    help Queue pending storage-image downloads together before waiting, instead of draining the queue per image
 setting Resolution scale
     key resolution
     float 0.25 4
@@ -178,6 +215,14 @@ setting FPS limit
     set options_fps_set
     help game = the pace the game asks for, as on the console (60 FPS, or 30 for a game made for 30); 0 = no limit;
     help 10 to 1000 = that many frames a second. F4 turns the limit off and on
+setting Smooth motion
+    key smooth_motion
+    int 0 1
+    default 0
+    startup
+    words Off|120 Hz
+    help Experimental (inkypaint, Splatoon 3 11.3.0): the game's logic stays at 60 steps a second while frames are
+    help drawn up to 120 a second, the camera interpolated between steps. Shows only with GPU time to spare
 setting Memory (GB)
     key memory_gb
     int 0 8
@@ -446,6 +491,15 @@ setting Network
     words Offline|Online
     help 1 = the game uses the computer's connection (known console service domains stay blocked); 0 = offline,
     help with loopback only (not a sandbox)
+setting LAN adapter
+    key lan_adapter
+    text 64
+    default ""
+    help The network adapter the game's LAN play and local wireless use, with network on: empty or auto = the one
+    help the internet goes through; virtual = a ZeroTier, Hamachi or Radmin VPN adapter when one is up (else auto);
+    help an adapter's name (en0, feth1234, "ZeroTier One", a part of it) or its IPv4 address; all = auto's address,
+    help with the game's broadcasts sent on every adapter (experimental). The game's broadcasts go out on the adapter
+    help it uses, which the computer's own routing wouldn't do for one it doesn't route the internet through
 setting Airplane mode
     key airplane_mode
     int 0 1
@@ -927,6 +981,23 @@ setting AOT threads
     default 0
     words Auto|#
     help The threads compiling the game's code when it is recompiled: 0 = one for each of the computer's cores
+setting Fast pipeline
+    key fast_pipeline
+    int 0 1
+    default 1
+    words LLVM's -O2|On
+    help At -O2, the recompiler's own short list of LLVM passes in place of LLVM's -O2 pipeline: half the compile time,
+    help and code that ran as fast or faster in its tests. Off, LLVM's -O2 as it is. A game made already keeps its code
+    help until it is recompiled
+setting Big function size
+    key big_function
+    int 0 10000000
+    default 4000
+    words No limit|# instructions
+    help Functions of more instructions than this are optimized at O1 when the rest is optimized more, each in a unit of
+    help its own: LLVM's O2 passes (value numbering, the SLP vectorizer) take time that grows faster than a function's
+    help size, and a handful of giant functions took a quarter of one game's compile. 0 = every function at the
+    help optimization level
 setting Unit cache limit
     key unit_cache_gb
     int 0 100000

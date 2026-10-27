@@ -266,9 +266,9 @@ interface nn::bcat::detail::ipc::IDeliveryCacheStorageService {
 }
 interface nn::bcat::detail::ipc::IDeliveryCacheFileService {
     [0] Open(nn::bcat::DirectoryName directory_name, nn::bcat::FileName file_name);
-    @stub [1] Read(i64 offset, buffer<u8, 6> data) -> u64 size;
-    @stub [2] GetSize() -> i64 size;
-    @stub [3] GetDigest() -> nn::bcat::Digest digest;
+    [1] Read(i64 offset, buffer<u8, 6> data) -> u64 size;
+    [2] GetSize() -> i64 size;
+    [3] GetDigest() -> nn::bcat::Digest digest;
 }
 interface nn::bcat::detail::ipc::IDeliveryCacheDirectoryService {
     @stub [0] Open(nn::bcat::DirectoryName directory_name);

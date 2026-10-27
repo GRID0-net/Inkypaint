@@ -357,6 +357,62 @@ int kobj_never_signaled(KObj* o) {
     return 0;
 }
 
+/* The SDK's sendmsg/recvmsg wire format, through the real generated BSD dispatchers and local sockets. */
+static size_t message_wire(u64 addr, const char* a, const char* b) {
+    u8* p = GP(addr);
+    size_t na = strlen(a), nb = strlen(b), at = 0;
+    p[at++] = 0;
+    snx_st_le32(p + at, 0); at += 4; /* no peer name */
+    snx_st_le32(p + at, 2); at += 4;
+    snx_st_le64(p + at, na); at += 8;
+    memcpy(p + at, a, na); at += na;
+    snx_st_le64(p + at, nb); at += 8;
+    memcpy(p + at, b, nb); at += nb;
+    snx_st_le32(p + at, 0); at += 4; /* control */
+    snx_st_le32(p + at, 0); at += 4; /* flags */
+    snx_st_le32(p + at, 0); at += 4; /* transferred */
+    return at;
+}
+static void batch_call(SvcObj* bsd, u32 cmd, u32 count, u64 addr, size_t size) {
+    request(cmd);
+    arg32(0, 0); arg32(1, count); arg32(2, 0x80); /* fd 0, nonblocking */
+    ctx.nb = 1;
+    ctx.b[0] = buf(addr, size);
+    CHECK(bsd->dispatch(bsd, &ctx) == 0 && ctx.out_size == 8);
+}
+static void test_mmsg(void) {
+    SvcObj* bsd = new_bsd_u();
+    SnxSocket* pair[2];
+    char data[32] = {0};
+    size_t size;
+    CHECK(!snx_socket_pair(pair, SNX_AF_UNIX, SNX_SOCK_STREAM, 0));
+    ((Bsd*)bsd->data)->fd[0].s = pair[0];
+    size = message_wire(IN0, "client", " hello");
+    batch_call(bsd, 30, 1, IN0, size);
+    CHECK(reply(0) == 1 && reply(4) == 0 && snx_ld_le32(GP(IN0) + size - 4) == 12);
+    CHECK(snx_socket_recv(pair[1], data, sizeof data, SNX_MSG_DONTWAIT, NULL, NULL) == 12);
+    CHECK(!memcmp(data, "client hello", 12));
+    CHECK(snx_socket_send(pair[1], "server hello", 12, 0, NULL) == 12);
+    size = message_wire(OUT0, "......", "......");
+    batch_call(bsd, 29, 1, OUT0, size);
+    CHECK(reply(0) == 1 && reply(4) == 0 && snx_ld_le32(GP(OUT0) + size - 4) == 12);
+    CHECK(!memcmp(GP(OUT0) + 17, "server", 6) && !memcmp(GP(OUT0) + 31, " hello", 6));
+    batch_call(bsd, 29, 1, OUT0, size);
+    CHECK((i32)reply(0) == -1 && reply(4) == SNX_EAGAIN);
+    /* Reject truncation, overflowing iov lengths, and a malformed second message before sending anything. */
+    size = message_wire(IN0, "a", "b");
+    batch_call(bsd, 30, 1, IN0, size - 1);
+    CHECK((i32)reply(0) == -1 && reply(4) == SNX_EINVAL);
+    batch_call(bsd, 30, 2, IN0, size);
+    CHECK((i32)reply(0) == -1 && reply(4) == SNX_EINVAL);
+    snx_st_le64(GP(IN0) + 9, ~(u64)0);
+    batch_call(bsd, 30, 1, IN0, size);
+    CHECK((i32)reply(0) == -1 && reply(4) == SNX_EINVAL);
+    CHECK(snx_socket_recv(pair[1], data, sizeof data, SNX_MSG_DONTWAIT, NULL, NULL) == -SNX_EAGAIN);
+    snx_socket_unref(pair[1]);
+    svcobj_unref(bsd);
+}
+
 int main(void) {
     hle_init();
     g_mem = calloc(1, 0x10000);
@@ -387,6 +443,7 @@ int main(void) {
     svcobj_unref(r);
     test_nifm();
     test_nifm_room();
+    test_mmsg();
     for (u32 i = 0; i < test_nhandles; i++) kobj_unref(&test_handles[i]->o);
     CHECK(test_objects == 0 && test_kobjs == 0);
     free(g_mem);

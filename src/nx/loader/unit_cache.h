@@ -54,9 +54,11 @@ int snx_unit_cache_keep(const SnxUnitCache* cache, const char* key, const unsign
    always keeps a tenth of itself free: the cache's oldest objects are removed to make room for a new one, and one
    there is no room for is not cached. Each reason a unit is not cached is said once, for the first unit it stops; the counts (units
    not cached, objects removed for room, reused ones whose time could not be renewed) at snx_unit_cache_close. Units
-   of one cache may run on several threads. 0, or -1 with why in error (snx_ir_object's) */
-int snx_unit_cache_object(SnxUnitCache* cache, SnxIr* ir, unsigned char** data, size_t* size, int* reused, char* error,
-                          size_t error_size);
+   of one cache may run on several threads. opt is the unit's optimization level: a unit at another level than the
+   cache's identity says carries it in its IR (a module flag), which the key covers. 0, or -1 with why in error
+   (snx_ir_object's) */
+int snx_unit_cache_object(SnxUnitCache* cache, SnxIr* ir, char opt, unsigned char** data, size_t* size, int* reused,
+                          char* error, size_t error_size);
 /* The cache's files in folder (its .o, and the .tmp a write left) held to limit bytes, the oldest by their time (the
    last write or reuse) removed first, then by name; 0 for no limit. Each file it cannot remove is said on stderr. 0, or
    -1 with why in error when the folder cannot be listed */

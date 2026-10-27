@@ -44,6 +44,9 @@ static struct {
     int split; /* SNX_RT_DUMP_SPLIT: each draw ends its pass, so the pictures are the main target after each draw */
     const char* dir;
     u32 at;      /* the present whose frame is dumped */
+    u32 trigger_w, trigger_h, trigger_fmt, trigger_after;
+    u64 trigger_shader;
+    u64 trigger; /* SNX_RT_DUMP_TARGET: start when this color target is first bound */
     int done;
     u32 pass;    /* passes ended in the frame */
     u32 npic;
@@ -65,6 +68,15 @@ static int rtd_on(void) {
         const char* at = getenv("SNX_RT_DUMP_AT");
         g_rtd.at = at && *at ? (u32)strtoul(at, NULL, 10) : 1500;
         g_rtd.on = g_rtd.dir && *g_rtd.dir;
+        const char* target = getenv("SNX_RT_DUMP_TARGET");
+        if (target && sscanf(target, "%ux%u:%u", &g_rtd.trigger_w, &g_rtd.trigger_h, &g_rtd.trigger_fmt) < 2)
+            g_rtd.trigger = strtoull(target, NULL, 16);
+        const char* shader = getenv("SNX_RT_DUMP_SHADER");
+        g_rtd.trigger_shader = shader ? strtoull(shader, NULL, 16) : 0;
+        if (g_rtd.trigger || g_rtd.trigger_w || g_rtd.trigger_shader) {
+            g_rtd.trigger_after = at && *at ? g_rtd.at : 0;
+            g_rtd.at = ~0u;
+        }
         const char* split = getenv("SNX_RT_DUMP_SPLIT");
         g_rtd.split = split && *split && *split != '0';
         const char* fill = getenv("SNX_RT_DUMP_FILL");
@@ -83,6 +95,14 @@ static int rtd_on(void) {
 static void tex_add(RtdTex* list, u32* n, const RtdTex* t);
 int vk_rtdump_split(void) { return g_rtd.split && rtd_on(); }
 int vk_rtdump_fill(const Surf* s) {
+    rtd_on();
+    if (g_rtd.on && g_vk_present >= g_rtd.trigger_after && s && ((g_rtd.trigger && s->gva == g_rtd.trigger) ||
+        (g_rtd.trigger_w && s->w == g_rtd.trigger_w && s->h == g_rtd.trigger_h &&
+         (!g_rtd.trigger_fmt || (u32)s->f.vk == g_rtd.trigger_fmt)))) {
+        g_rtd.at = g_vk_present;
+        g_rtd.trigger = 0;
+        g_rtd.trigger_w = 0;
+    }
     if (!rtd_on() || !g_rtd.fill || !s || s->w < 1280 || s->f.depth || s->f.is_int) return 0;
     for (u32 i = 0; i < g_rtd.nfilled; i++)
         if (g_rtd.filled[i] == s) return 0;
@@ -93,6 +113,11 @@ int vk_rtdump_fill(const Surf* s) {
     return 1;
 }
 void vk_rtdump_draw(u64 vs, u64 fs) {
+    rtd_on();
+    if (g_rtd.on && g_rtd.trigger_shader && g_vk_present >= g_rtd.trigger_after && fs == g_rtd.trigger_shader) {
+        g_rtd.at = g_vk_present;
+        g_rtd.trigger_shader = 0;
+    }
     if (!rtd_on()) return;
     g_rtd.draws++;
     for (u32 i = 0; i < g_rtd.nnext; i++) tex_add(g_rtd.tex, &g_rtd.ntex, &g_rtd.next[i]);
@@ -113,7 +138,7 @@ static void tex_add(RtdTex* list, u32* n, const RtdTex* t) {
 }
 static void rtd_take_sub(Surf* s, u32 slot, u32 layer, u32 level);
 /* SNX_RT_DUMP_TEX=address[,address] or cube: those textures (cube: every cube texture), as the dumped frame first
-   binds them, every layer (up to 24) of their first 4 levels. Addresses move from run to run */
+   binds them, every layer (up to 96) of their first 4 levels. Addresses move from run to run */
 static void tex_dump(const Surf* bound) {
     static u64 want[8], done[8];
     static int nwant = -1, cubes;
@@ -123,7 +148,10 @@ static void tex_dump(const Surf* bound) {
         nwant = 0;
         const char* e = getenv("SNX_RT_DUMP_TEX");
         cubes = e && strstr(e, "cube") != NULL;
-        if (cubes) e = NULL;
+        if (cubes) {
+            e = strchr(e, ',');
+            if (e) e++;
+        }
         while (e && *e && nwant < 8) {
             char* end;
             want[nwant] = strtoull(e, &end, 16);
@@ -146,8 +174,18 @@ static void tex_dump(const Surf* bound) {
             fprintf(g_rtd.index, "  texture %llx: %ux%u, %u layers, %u levels, view type %d, format %u, took drawn %d\n",
                     (unsigned long long)bound->gva, bound->w, bound->h, bound->layers, bound->levels, (int)bound->type,
                     (u32)bound->f.vk, bound->took_drawn);
+        Surf* sources[8];
+        int ns = vk_rt_drawn_in(bound->gva, bound->gva + bound->size, sources, 8);
+        for (int i = 0; i < ns && i < 8; i++) {
+            Surf* source = sources[i];
+            if (g_rtd.index)
+                fprintf(g_rtd.index, "  cube source %llx %ux%u gen %llu drawn frame %u fresh %d\n",
+                        (unsigned long long)source->gva, source->w, source->h,
+                        (unsigned long long)source->wgen, source->drawn_at, vk_rt_drawn_fresh(source));
+            rtd_take_sub(source, 99, 0, 0);
+        }
         for (u32 l = 0; l < bound->levels && l < 4; l++)
-            for (u32 k = 0; k < bound->layers && k < 24; k++) rtd_take_sub((Surf*)bound, 100, k, l);
+            for (u32 k = 0; k < bound->layers && k < 96; k++) rtd_take_sub((Surf*)bound, 100, k, l);
     }
 }
 void vk_rtdump_tex(int stage, int slot, const Surf* found, const Surf* bound) {
@@ -217,6 +255,9 @@ static void rtd_take_sub(Surf* s, u32 slot, u32 layer, u32 level) {
     p->fmt = (u32)s->f.vk;
     p->layer = layer;
     p->level = level;
+    /* Transitioning a sampled texture can end the open pass and capture its targets recursively. Reserve this
+       picture before that happens, so the pass-end capture takes the next slot. */
+    g_rtd.npic++;
     VkCommandBuffer cb = vk_cmd();
     vk_surf_use(cb, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
                 VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -233,7 +274,6 @@ static void rtd_take_sub(Surf* s, u32 slot, u32 layer, u32 level) {
                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {p->w, p->h, 1}};
     rec_CmdCopyImageToBuffer(cb, p->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, p->buf, 1, &c);
-    g_rtd.npic++;
 }
 
 void vk_rtdump_pass_end(Surf* const* rt, u32 n, const Surf* zt) {

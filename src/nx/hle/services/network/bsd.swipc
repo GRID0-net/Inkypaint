@@ -20,6 +20,8 @@ type nn::socket::sf::SelectTimeval = struct {
     b8 is_null;
 };
 
+type nn::socket::sf::MMsgTimeout = struct { i64 sec; i64 nsec; };
+
 # bsd:s is the system's: DuplicateSocket and raw sockets
 @fallback(bsd_unknown)
 interface nn::socket::sf::IClient is bsd:u, bsd:a, bsd:s {
@@ -61,6 +63,9 @@ interface nn::socket::sf::IClient is bsd:u, bsd:a, bsd:s {
     [25] Read(i32 fd, buffer<u8, 0x22> message) -> (i32 ret, u32 bsd_errno);
     [26] Close(i32 fd) -> (i32 ret, u32 bsd_errno);
     [27] DuplicateSocket(i32 fd, u64 reserved) -> (i32 ret, u32 bsd_errno);
+    [29] RecvMMsg(i32 fd, u32 count, u32 flags, u32 reserved, nn::socket::sf::MMsgTimeout timeout,
+                  buffer<u8, 0x22> data) -> (i32 ret, u32 bsd_errno);
+    [30] SendMMsg(i32 fd, u32 count, u32 flags, buffer<u8, 0x22> data) -> (i32 ret, u32 bsd_errno);
     [31] EventFd(u64 initval, u32 flags) -> (i32 ret, u32 bsd_errno);
     # SDK 8 sends the pid slot alone, SDK 13 a u8 before it: declared as the shorter, which both send at least
     @stub [32] RegisterResourceStatisticsName(buffer<u8, 0x21> name, pid) -> (i32 ret, u32 bsd_errno);

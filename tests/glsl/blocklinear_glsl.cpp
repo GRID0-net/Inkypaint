@@ -16,6 +16,7 @@ using namespace glsl;
 // what blocklinear.comp declares, under its names
 struct Mover : Invocation {
     uint runs, rows, lin_runs, y0, gob_y0, z0, bh, hmask, bd, dmask, bsh, block_row, slab, bl_bias, lin_bias, to_bl;
+    uint sanitize = 0, linear_input = 0;
     const uvec4* src;
     uvec4* dst;
 #include "nx/gpu/texture/blocklinear.glsl"
@@ -98,7 +99,40 @@ static void one(uint32_t row_bytes, uint32_t h, uint32_t d, uint32_t bh, uint32_
     }
 }
 
+/* All half encodings: finite components (including -0 and subnormals) must survive bit-for-bit. Packed formats
+   must keep their finite neighbors when one channel is non-finite. */
+static void hdr_components() {
+    Mover shader{};
+    for (uint32_t h = 0; h < 65536; h++) {
+        uint32_t expected = (h & 0x7c00) == 0x7c00 ? 0 : h;
+        if (shader.hdr_word(0x35550000u | h, 1) != (0x35550000u | expected) ||
+            shader.hdr_word((h << 16) | 0x8001u, 1) != ((expected << 16) | 0x8001u))
+            if (failures++ < 10) std::printf("HDR half encoding %04x\n", h);
+    }
+    const uint32_t finite[] = {0, 0x80000000u, 1, 0x80000001u, 0x007fffffu, 0x00800000u,
+                               0x3f800000u, 0x7f7fffffu, 0xff7fffffu};
+    for (uint32_t v : finite)
+        if (shader.hdr_word(v, 2) != v) failures++;
+    const uint32_t bad[] = {0x7f800000u, 0xff800000u, 0x7fc00000u, 0x7f800001u, 0xffffffffu};
+    for (uint32_t v : bad)
+        if (shader.hdr_word(v, 2) != 0) failures++;
+    const uint32_t packed = 0x781e03c0u; /* 1.0 in R, G and B */
+    const uint32_t mask[] = {0x000007ffu, 0x003ff800u, 0xffc00000u};
+    const uint32_t infinity[] = {0x000007c0u, 0x003e0000u, 0xf8000000u};
+    for (unsigned i = 0; i < 3; i++) {
+        uint32_t neighbors = packed & ~mask[i];
+        if (shader.hdr_word(neighbors | infinity[i], 3) != neighbors ||
+            shader.hdr_word(neighbors | mask[i], 3) != neighbors)
+            failures++;
+    }
+    for (unsigned i = 0; i < 1000; i++) {
+        uint32_t v = random_word();
+        if (shader.hdr_word(v, 0) != v) failures++;
+    }
+}
+
 int main() {
+    hdr_components();
     for (int i = 0; i < 400; i++) {
         uint32_t row_bytes = 1 + random_word() % 400, h = 1 + random_word() % 90, bh = random_word() % 6;
         uint32_t d = 1, bd = 0;
