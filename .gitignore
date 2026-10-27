@@ -98,3 +98,6 @@ edenprobe-run/
 # the launcher's SwiftPM build (scripts/package-launcher.sh puts the app in build/launcher)
 /src/launcher/.build/
 /src/launcher/.swiftpm/
+# inkypaint's working notes and throwaway prototypes: this checkout's own, not the project's
+/handoff.md
+/prototypes/

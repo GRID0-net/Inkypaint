@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the inkypaint contributors
+name: Bug report
+description: Something in inkypaint doesn't work, crashes, or doesn't look, sound or play right
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please attach nothing of the game itself: no keys, dumps or game files.
+  - type: input
+    id: version
+    attributes:
+      label: inkypaint version
+      description: The release (v0.1.0) or the commit you built.
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU, GPU and memory
+      placeholder: Ryzen 5 5600, RX 6700 XT, 16 GB
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Online, offline or in a private lobby?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: The game's log
+      description: >-
+        recompiled/0100C2500FC20000/0100C2500FC20000.log in the data folder (Game Files > Show Game Log), attached as a
+        file. For a setup that failed, the launcher's log: Game Files > Details.

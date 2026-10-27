@@ -9,6 +9,9 @@
 #   ./inkypaint.sh build      configure and build the runtime and driver into build/macos
 #   ./inkypaint.sh prepare    extract the base game with the 11.3.0 update, then recompile it
 #   ./inkypaint.sh launcher   build the runtime, then the inkypaint app (SwiftUI, Xcode 26) into build/launcher
+#   ./inkypaint.sh windows    cross-build inkypaint for Windows x86_64 (runtime and Qt launcher): a portable zip and an
+#                             installer in build/ (scripts/package-windows.sh: LLVM 22+ with lld, CMake, Ninja, zstd;
+#                             brew install makensis for the installer). Linux x86_64 builds on Linux: scripts/package-linux.sh
 #   ./inkypaint.sh run [secs] [--KEY=VALUE...]  run the game (default: until you close it), screenshot at the end
 #   ./inkypaint.sh perf [secs] [--KEY=VALUE...] a measured run: frame rate, GPU time, memory, threads, call stacks
 #   ./inkypaint.sh diag [secs]  three measured runs that narrow down the rendering bugs (about 6 minutes)
@@ -68,9 +71,10 @@ logged() {
 
 brew_prefix() { command -v brew >/dev/null && brew --prefix || echo /opt/homebrew; }
 mem_gb() { echo $(( $(sysctl -n hw.memsize) / 1073741824 )); }
-default_jobs() { # each LLVM compile of a big code unit can take 1-2 GB: keep two free for macOS
+default_jobs() { # a compile takes up to about 2 GB and macOS keeps 4: two on 8 GB, more with more memory
     local m; m=$(mem_gb)
-    if [ "$m" -le 8 ]; then echo 2; elif [ "$m" -le 16 ]; then echo 4; else sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || echo 6; fi
+    local cpus; cpus=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    if [ "$m" -le 8 ]; then echo 2; else local j=$(( (m - 4) / 2 )); [ "$j" -gt "$cpus" ] && j=$cpus; echo "$j"; fi
 }
 
 find_one() { # the file in dir $1 whose name matches the glob $2
@@ -102,7 +106,11 @@ do_setup() {
     command -v brew >/dev/null || die "Install Homebrew first (https://brew.sh), then run this again"
     local pkgs="cmake ninja pkg-config llvm"
     local missing=""
-    for p in $pkgs; do brew list --formula "$p" >/dev/null 2>&1 || missing="$missing $p"; done
+    # a tool already on PATH from elsewhere (a CI image's CMake) is used as it is: brew would refuse to link over it
+    for p in $pkgs; do
+        if [ "$p" != llvm ] && command -v "$p" >/dev/null 2>&1; then continue; fi
+        brew list --formula "$p" >/dev/null 2>&1 || missing="$missing $p"
+    done
     if [ -n "$missing" ]; then
         say "Homebrew will install:$missing"
         brew install $missing || die "brew install failed"
@@ -327,6 +335,158 @@ do_capture() {
     METAL_CAPTURE_ENABLED=1 do_run 0 "$@"
 }
 
+# Which change brings the plaza's horizontal line: four runs, the frame-rate experiment (INKYPAINT_RENDER_HZ=120) off
+# and on, each with the display adaptation off and on. Play each into the plaza, look, close the window, and answer
+# whether the line was there. The answers and the game logs go to logs/seamtest-<time>/
+do_sample() {
+    # the running game, however it was started (the launcher too): its call stacks for secs seconds and each thread's
+    # CPU, with the log so far. Start it at the moment that is slow (a busy match)
+    local secs=${1:-10}
+    local pid; pid=$(pgrep -n -x "$GAME_ID" || true)
+    [ -n "$pid" ] || die "the game isn't running: start it, get to the slow part, then run this"
+    local out="$LOGS/sample-$(stamp)"; mkdir -p "$out"
+    say "sampling the game (pid $pid) for $secs s into logs/$(basename "$out"): keep playing"
+    ( for i in 1 2 3; do echo "== $i"; ps -M -p "$pid" -o pid,%cpu,rss 2>/dev/null; sleep $(( secs / 3 > 0 ? secs / 3 : 1 )); done ) > "$out/threads.txt" 2>&1 &
+    local poll=$!
+    sample "$pid" "$secs" -mayDie -file "$out/sample.txt" > /dev/null 2>&1
+    wait "$poll" 2>/dev/null
+    cp "$GAME_DIR/$GAME_ID.log" "$out/game.log" 2>/dev/null
+    grep "perf:" "$out/game.log" | tail -4
+    say "done: logs/$(basename "$out") (tell me, I read it from there)"
+}
+do_seamtest() {
+    local out="$LOGS/seamtest-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    local n=0
+    for hz in off 120; do
+        for adapt in 0 1; do
+            n=$((n + 1))
+            local name="run$n-interp-$hz-adapt$adapt"
+            say "seamtest $n/4: frame-rate experiment $hz, adapt_aspect=$adapt. Go to the plaza, look for the line, then close the window"
+            ( cd "$GAME_DIR" && if [ "$hz" = off ]; then unset INKYPAINT_RENDER_HZ; else export INKYPAINT_RENDER_HZ=$hz; fi
+              SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 "./$GAME_ID" --adapt_aspect=$adapt --shot="$out/$name" "$@" ) \
+                > "$out/$name.txt" 2>&1
+            [ -f "$GAME_DIR/$GAME_ID.log" ] && cp "$GAME_DIR/$GAME_ID.log" "$out/$name.log"
+            local answer=""
+            read -r -p "Did you see the horizontal line in run $n (experiment $hz, adapt_aspect=$adapt)? [y/n/unsure] " answer
+            echo "$name: ${answer:-no answer}" >> "$out/results.txt"
+        done
+    done
+    say "answers in logs/$(basename "$out")/results.txt:"
+    cat "$out/results.txt"
+}
+
+# The frame-rate experiment's parts, one left native per run, to find which brings the line. Each run has the
+# experiment on (INKYPAINT_RENDER_HZ=120) with one switch: answers and logs in logs/seamparts-<time>/
+do_seamparts() {
+    local out="$LOGS/seamparts-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    local n=0 part
+    for part in INKYPAINT_KEEP_ALTERNATION=1 INKYPAINT_CAMERA_COMPARE=off INKYPAINT_NO_GFX_HOLD=1 INKYPAINT_NO_GATE=1; do
+        n=$((n + 1))
+        local name="run$n-${part%%=*}"
+        say "seamparts $n/4: experiment on with $part. Go to the plaza, look for the line, then close the window"
+        [ "$part" = INKYPAINT_NO_GATE=1 ] && say "(this one runs the game faster than normal: that's expected, only look at the line)"
+        ( cd "$GAME_DIR" && env INKYPAINT_RENDER_HZ=120 "$part" SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 \
+              "./$GAME_ID" --shot="$out/$name" "$@" ) > "$out/$name.txt" 2>&1
+        [ -f "$GAME_DIR/$GAME_ID.log" ] && cp "$GAME_DIR/$GAME_ID.log" "$out/$name.log"
+        local answer=""
+        read -r -p "Did you see the horizontal line in run $n ($part)? [y/n/unsure] " answer
+        echo "$name: ${answer:-no answer}" >> "$out/results.txt"
+    done
+    say "answers in logs/$(basename "$out")/results.txt:"
+    cat "$out/results.txt"
+}
+
+# Which of the jobs the experiment holds back on an extra frame brings the flash: four runs, each letting one group
+# of them run on every frame anyway (INKYPAINT_GATE_ALLOW). Answers and logs in logs/seamjobs-<time>/
+do_seamjobs() {
+    local out="$LOGS/seamjobs-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    local groups=(
+        "lighting:Ltk,Bake,Scene,Visualize"
+        "effects:Effect,GameVfx,XLink"
+        "ui:GameUIFactory,GameUIFactory::Update1st,GameUIFactory::Update2ndMain,GameUIFactory::Update2ndSub1,GameUIFactory::Update2ndSub2,Transition,GameSignal:BgUI,GameSignal"
+        "camera:Camera,GameCamera,Event,GameEvent,Banc"
+    )
+    local n=0 g
+    for g in "${groups[@]}"; do
+        n=$((n + 1))
+        local label=${g%%:*} jobs=${g#*:}
+        say "seamjobs $n/4: the $label jobs run on every frame ($jobs). Go to the plaza, watch for the flash, then close the window"
+        ( cd "$GAME_DIR" && env INKYPAINT_RENDER_HZ=120 INKYPAINT_GATE_ALLOW="$jobs" SDL_VULKAN_LIBRARY="$mvk" \
+              MVK_CONFIG_LOG_LEVEL=2 "./$GAME_ID" --shot="$out/run$n-$label" "$@" ) > "$out/run$n-$label.txt" 2>&1
+        [ -f "$GAME_DIR/$GAME_ID.log" ] && cp "$GAME_DIR/$GAME_ID.log" "$out/run$n-$label.log"
+        local answer=""
+        read -r -p "Did the flash happen in run $n ($label)? [y/n/unsure] " answer
+        echo "run$n-$label: ${answer:-no answer}" >> "$out/results.txt"
+    done
+    say "answers in logs/$(basename "$out")/results.txt:"
+    cat "$out/results.txt"
+}
+
+# The flash, narrowed further: whether it is the jobs held back on an extra frame at all, the frames that catch up
+# with two steps, the actor jobs of the render graph that run while the rest is held, or the core simulation jobs.
+# Answers and logs in logs/seamsteps-<time>/
+do_seamsteps() {
+    local out="$LOGS/seamsteps-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    local runs=(
+        "nothing-held|INKYPAINT_GATE_ALLOW=*"
+        "one-step|INKYPAINT_MAX_STEPS=1"
+        "actor-render-held|INKYPAINT_GATE_EXTRA=RunBaseProc,StartBaseProc,ActorAIGroupMgr::Job,ActorAIGroupMgr::SetupJob,EntryJobsBgGraphics"
+        "core-sim-runs|INKYPAINT_GATE_ALLOW=Actor,Physics,GamePhysics,GameFrame,GameNet,GameNet:Send,Controller,ControllerCheck,Sound,SplSound,Rail,GraphRailMgr,NavMeshSystem,SplGroupAI,Blackboard,LuaModule,Tool,DenguModule,Rumble,GameRumble"
+    )
+    local n=0 r
+    for r in "${runs[@]}"; do
+        n=$((n + 1))
+        local label=${r%%|*} setting=${r#*|}
+        say "seamsteps $n/4 ($label): experiment on with $setting. Go to the plaza, watch for the flash, then close the window"
+        ( cd "$GAME_DIR" && env INKYPAINT_RENDER_HZ=120 "$setting" SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 \
+              "./$GAME_ID" --shot="$out/run$n-$label" "$@" ) > "$out/run$n-$label.txt" 2>&1
+        [ -f "$GAME_DIR/$GAME_ID.log" ] && cp "$GAME_DIR/$GAME_ID.log" "$out/run$n-$label.log"
+        local answer=""
+        read -r -p "Did the flash happen in run $n ($label)? [y/n/unsure] " answer
+        echo "run$n-$label: ${answer:-no answer}" >> "$out/results.txt"
+    done
+    say "answers in logs/$(basename "$out")/results.txt:"
+    cat "$out/results.txt"
+}
+
+# One run per "label|ENV=VALUE" argument, the experiment on (INKYPAINT_RENDER_HZ=120) plus that setting: watch the
+# plaza for the flash and answer. With no arguments, the core simulation jobs that stop the flash, split in four.
+# Answers and logs in logs/seamallow-<time>/
+do_seamallow() {
+    local out="$LOGS/seamallow-$(stamp)"; mkdir -p "$out"
+    local mvk; mvk=$(mvk_dylib)
+    [ -x "$GAME_DIR/$GAME_ID" ] || die "not prepared yet: ./inkypaint.sh prepare"
+    local runs=("$@")
+    [ ${#runs[@]} -gt 0 ] || runs=(
+        "actor|INKYPAINT_GATE_ALLOW=Actor"
+        "physics|INKYPAINT_GATE_ALLOW=Physics,GamePhysics"
+        "frame-net-input|INKYPAINT_GATE_ALLOW=GameFrame,GameNet,GameNet:Send,Controller,ControllerCheck"
+        "the-rest|INKYPAINT_GATE_ALLOW=Sound,SplSound,Rail,GraphRailMgr,NavMeshSystem,SplGroupAI,Blackboard,LuaModule,Tool,DenguModule,Rumble,GameRumble"
+    )
+    local n=0 r
+    for r in "${runs[@]}"; do
+        n=$((n + 1))
+        local label=${r%%|*} setting=${r#*|}
+        say "seamallow $n/${#runs[@]} ($label): experiment on with $setting. Go to the plaza, watch for the flash, then close the window"
+        ( cd "$GAME_DIR" && env INKYPAINT_RENDER_HZ=120 "$setting" SDL_VULKAN_LIBRARY="$mvk" MVK_CONFIG_LOG_LEVEL=2 \
+              "./$GAME_ID" --shot="$out/run$n-$label" ) > "$out/run$n-$label.txt" 2>&1
+        [ -f "$GAME_DIR/$GAME_ID.log" ] && cp "$GAME_DIR/$GAME_ID.log" "$out/run$n-$label.log"
+        local answer=""
+        read -r -p "Did the flash happen in run $n ($label)? [y/n/unsure] " answer
+        echo "run$n-$label: ${answer:-no answer}" >> "$out/results.txt"
+    done
+    say "answers in logs/$(basename "$out")/results.txt:"
+    cat "$out/results.txt"
+}
+
 cmd=${1:-help}; shift || true
 case "$cmd" in
     doctor) logged doctor do_doctor ;;
@@ -342,7 +502,14 @@ case "$cmd" in
     rtdump) logged rtdump do_rtdump "$@" ;;
     shadowdiag) logged shadowdiag do_shadowdiag "$@" ;;
     launcher) logged build do_build && logged launcher "$ROOT/scripts/package-launcher.sh" ;;
+    windows) logged windows "$ROOT/scripts/package-windows.sh" ;;
     capture) logged capture do_capture "$@" ;;
+    seamtest) do_seamtest "$@" ;;
+    seamparts) logged build do_build && do_seamparts "$@" ;;
+    seamjobs) logged build do_build && do_seamjobs "$@" ;;
+    seamsteps) logged build do_build && do_seamsteps "$@" ;;
+    seamallow) do_seamallow "$@" ;;
+    sample) do_sample "$@" ;;
     all) logged doctor do_doctor; logged setup do_setup; logged build do_build; logged prepare do_prepare; logged run do_run "$@" ;;
-    *) sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) sed -n '4,26p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

@@ -144,8 +144,11 @@ whether the agent may build and run: only one at a time can):
 
 ## Git
 
-- `upstream` is `https://github.com/scarletnx/ScarletNX` (public). inkypaint has no `origin` yet. Push only when
-  asked. Never force-push a pushed branch.
+- `origin` is `https://github.com/GRID0-net/Inkypaint` (public), `upstream` is
+  `https://github.com/scarletnx/ScarletNX` (public). Push only when asked. Never force-push a pushed branch.
+- Releases: a pushed `v*` tag runs `.github/workflows/release.yml`, which builds Linux (`scripts/package-linux.sh`, in
+  Ubuntu 22.04), Windows (`scripts/package-windows.sh`, cross-built on Linux) and macOS (`./inkypaint.sh launcher`)
+  and publishes them as the tag's release. `checks.yml` runs `tests/tracked_material.py` on every push.
 - Commit subjects use a bracketed area prefix (for example, `[gpu]` or `[build]`) followed by an imperative sentence.
   The body says why, and how it was verified. Check
   every claim in the message against the staged diff.

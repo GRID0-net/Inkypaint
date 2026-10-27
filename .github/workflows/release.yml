@@ -1,0 +1,218 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright 2026 the inkypaint contributors
+name: Release
+
+# inkypaint for every platform it ships on, from one commit:
+#   Linux x86_64    a portable .tar.gz, built in Ubuntu 22.04 (glibc 2.35) by scripts/package-linux.sh
+#   Windows x86_64  a portable .zip and an installer, cross-built on Linux by scripts/package-windows.sh
+#   macOS arm64     the app (macOS 26, Apple silicon), zipped, built by ./inkypaint.sh launcher
+# A version tag (v1.2.3, or v1.2.3-beta.1 for a prerelease) pushed builds them all and publishes them as that tag's
+# GitHub release, with .github/release-notes.md as its notes and SHA256SUMS beside the files. Run by hand (Actions >
+# Release > Run workflow), it builds them and keeps them as the run's artifacts, without a release.
+#
+# Nothing of the game is in any of them: players set it up from their own copy in the launcher.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # the version the packages are named after: the tag (v1.2.3), else dev- and the commit
+  VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('dev-{0}', github.sha) }}
+
+jobs:
+  checks:
+    name: Nothing of the game in the tree
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tracked material (keys, dumps, the game's files)
+        run: |
+          python3 tests/tracked_material.py --self-test
+          python3 tests/tracked_material.py .
+
+  linux:
+    name: Linux x86_64
+    needs: checks
+    runs-on: ubuntu-24.04
+    # the oldest system the package runs on: it links glibc's symbols of this one
+    container: ubuntu:22.04
+    # LLVM's libraries take about 40 minutes the first time, then come from the cache
+    timeout-minutes: 240
+    steps:
+      # before the checkout: with git, actions/checkout clones (tags included), and git describe names the package
+      - name: Install git
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates zstd
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install the build tools
+        run: |
+          git config --global --add safe.directory '*'
+          scripts/linux-build-deps.sh 23
+      - uses: actions/cache@v5
+        with:
+          path: .cache/linux/llvm
+          key: linux-llvm-x86_64-${{ hashFiles('scripts/linux-llvm.sh', 'scripts/llvm-libraries/CMakeLists.txt', 'cmake/llvm_components.cmake') }}
+      - uses: actions/cache@v5
+        with:
+          path: .cache/linux/qt
+          key: linux-qt-${{ hashFiles('scripts/windows-deps.lock.json') }}
+      - uses: actions/cache@v5
+        with:
+          path: .cache/cpm
+          key: cpm-linux-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Build and package
+        env:
+          INKY_VERSION: ${{ env.VERSION }}
+          INKY_JOBS: 4
+        run: scripts/package-linux.sh
+      - name: The build's logs
+        if: failure()
+        run: for f in .cache/linux/*.log; do echo "::group::$f"; tail -n 150 "$f"; echo "::endgroup::"; done
+      # the launcher starts and draws its pages with the package's own Qt (the offscreen platform: no display here)
+      - name: Smoke test
+        run: |
+          cd build/linux-package/inkypaint
+          for pane in play files mods settings online; do
+            QT_QPA_PLATFORM=offscreen INKYPAINT_PANE=$pane INKYPAINT_SCREENSHOT=/tmp/shot-$pane.png timeout 60 ./inkypaint
+            test -s /tmp/shot-$pane.png
+          done
+          ./runtime/scarletnx --help > /dev/null
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inkypaint-linux-x86_64
+          path: build/inkypaint-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install the build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ninja-build nasm nsis \
+            python3-venv zstd
+          curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 23
+          sudo apt-get install -y --no-install-recommends lld-23
+      - uses: actions/cache@v5
+        with:
+          path: |
+            .cache/windows/packages
+            .cache/windows/hostqt
+          key: windows-deps-${{ hashFiles('scripts/windows-deps.lock.json', 'scripts/windows-deps.py') }}
+      - uses: actions/cache@v5
+        with:
+          path: .cache/cpm
+          key: cpm-windows-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Build and package
+        env:
+          INKY_JOBS: 4
+        run: scripts/package-windows.sh
+      - name: The build's logs
+        if: failure()
+        run: for f in .cache/windows/*.log; do echo "::group::$f"; tail -n 150 "$f"; echo "::endgroup::"; done
+      # the packages are named after git describe: the tag on a release, the commit otherwise
+      - name: Name the packages
+        run: |
+          cd build
+          for f in inkypaint-*-windows-x86_64*; do
+            to="inkypaint-$VERSION-windows-x86_64${f##*-windows-x86_64}"
+            [ "$f" = "$to" ] || mv "$f" "$to"
+          done
+          ls -l inkypaint-*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inkypaint-windows-x86_64
+          path: |
+            build/inkypaint-*-windows-x86_64.zip
+            build/inkypaint-*-windows-x86_64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS arm64
+    needs: checks
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install the build tools and MoltenVK
+        # setup takes the image's CMake and the like where it has them, and Homebrew's for the rest
+        run: ./inkypaint.sh setup
+      - uses: actions/cache@v5
+        with:
+          path: .cache/cpm
+          key: cpm-macos-${{ hashFiles('cmake/dependencies.cmake') }}
+      - name: Build the runtime and the app
+        env:
+          INKY_BUILD_JOBS: 3
+        # the app's version is the number alone (CFBundleShortVersionString): 1.2.3, or 0.0.0 for a dev build
+        run: |
+          case "$VERSION" in v*) export INKY_VERSION="${VERSION#v}" ;; *) export INKY_VERSION=0.0.0 ;; esac
+          ./inkypaint.sh launcher
+      - name: The build's logs
+        if: failure()
+        run: for f in logs/*-latest.log; do echo "::group::$f"; tail -n 150 "$f"; echo "::endgroup::"; done
+      - name: Zip the app
+        run: |
+          xattr -cr build/launcher/inkypaint.app
+          ditto -c -k --sequesterRsrc --keepParent build/launcher/inkypaint.app "build/inkypaint-$VERSION-macos-arm64.zip"
+          ls -l build/*.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inkypaint-macos-arm64
+          path: build/inkypaint-*-macos-arm64.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: [linux, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum inkypaint-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=
+          case "$TAG" in *-*) prerelease=--prerelease ;; esac
+          sed "s/@VERSION@/$VERSION/g" .github/release-notes.md > /tmp/notes.md
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "inkypaint $TAG" --notes-file /tmp/notes.md --verify-tag $prerelease
+          fi
