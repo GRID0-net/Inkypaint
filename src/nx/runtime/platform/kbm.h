@@ -29,6 +29,8 @@ void kbm_set_menu(int on);
    keys and mouse aim on handoff; held keys never reappear when control returns. */
 void kbm_controller_activity(int active, u64 now_ns);
 int kbm_enabled(void);
+/* a key of the .ini's Keyboard and mouse section and its value: 1 when it is one of that section's */
+int kbm_ini(const char* key, const char* value);
 
 /* an input going down or up. 1 when it was Free the mouse's going down: the caller lets the mouse go (or takes it) */
 int kbm_input(int code, int down);

@@ -219,7 +219,7 @@ int backend_ini(const char* k, const char* v) {
     /* the in-game menu reads the touch mode, and the renderer the on-screen controls, under ui_lock */
     ui_lock();
     if (o) ini_read(o, v);
-    known = o || vpad_ini(k, v) || gamepad_ini(k, v);
+    known = o || vpad_ini(k, v) || gamepad_ini(k, v) || kbm_ini(k, v);
     ui_unlock();
     return known || unattended_ini(k, v);
 }

@@ -197,6 +197,13 @@ void kbm_bindings_set(const IniOpt* o, const char* v) {
 
 static int bound_to(int control, int code) {
     for (int i = 0; i < BINDINGS; i++)
+/* a setting of the Keyboard and mouse section, read from the .ini or the command line: options.c hands it here through
+   backend_ini, which nothing else in this section was reading */
+int kbm_ini(const char* key, const char* value) {
+    const IniOpt* o = ini_find(g_kbm_ini, key);
+    if (o) ini_read(o, value);
+    return o != NULL;
+}
         if (bound[in_menu][control][i] == code) return 1;
     return 0;
 }
