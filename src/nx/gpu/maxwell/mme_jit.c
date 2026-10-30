@@ -677,6 +677,12 @@ void mme_jit_cutoff(GpuChannel* ch) {
 
 /* mme.c's seam: the compiled form of slot idx's code, compiled on its first call */
 int mme_jit_run(GpuChannel* ch, MmeRec* rec, u32 idx, u32 np) {
+#ifdef SNX_IOS_AOT_ONLY
+    /* Known macros keep their native HLE paths; unknown macros use the existing
+       command interpreter. Shader compilation through Metal is unaffected. */
+    (void)ch; (void)rec; (void)idx; (void)np;
+    return 0;
+#endif
     u32 s, batch, n = 0, i;
     u64 hash;
     MmeJitEntry* entry;

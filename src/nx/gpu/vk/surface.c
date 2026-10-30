@@ -38,6 +38,7 @@ static struct {
     u64 bytes;
 } g_held[3];         /* by VK_LRU_TEX or VK_LRU_RT: the surfaces and their memory */
 static u32 g_parked; /* render targets parked */
+static void shape_wrote(const Surf* s);
 static void drawn_park(Surf* s);   /* out of the drawn list while parked */
 static void drawn_unpark(Surf* s); /* and back in */
 static int lru_kind(const Surf* s) { return s->lru > LRU_AGED ? s->lru - LRU_AGED : s->lru; }
@@ -194,9 +195,7 @@ static Surf* surf_create(u64 gva, u32 w, u32 h, VkFmt f, u32 fkey, u32 bl, u32 b
     if (is_rt) usage |= f.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     /* the draws rendering to a color target can sample it, in ATTACHMENT_FEEDBACK_LOOP_OPTIMAL (gpu/vk/render.c) */
     if (is_rt && !f.depth && g_vk.has_feedback) usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
-    VkFormatProperties format_props;
-    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f.vk, &format_props);
-    if (format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) {
+    if (vk_format_has(f.vk, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
         usage |= VK_IMAGE_USAGE_STORAGE_BIT;
         s->storage_capable = 1;
     }
@@ -350,9 +349,7 @@ VkImage vk_unscaled_image(const Surf* s, u32 layers, VmaAllocation* mem) {
     return img;
 }
 static int blit_ok(VkFormat f, VkFormatFeatureFlags need) {
-    VkFormatProperties p;
-    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
-    return (p.optimalTilingFeatures & need) == need;
+    return vk_format_has(f, need);
 }
 /* a scaled target's contents move between its image and guest memory by blits: 0 when its format can't be blitted
    (said once) */
@@ -399,6 +396,7 @@ static u64 g_wseq;
 void vk_surf_wrote(Surf* s) {
     s->wgen++;
     s->wseq = ++g_wseq;
+    if (s->is_rt) shape_wrote(s);
 }
 /* the GPU pages the render targets not parked cover, so a write that meets none (almost all) skips the walk over every
    target in vk_rt_before_write: a target adds its pages when it is made or taken out of parking, and removes them when it
@@ -1078,7 +1076,39 @@ Surf* vk_rt_for_cpu(u64 cpu_addr, u32 w, u32 h) {
    of the whole list three quarters of the GPU thread, where a binary search finds the range's first */
 static Surf** g_drawn;
 static u64* g_drawn_key; /* their drawn_from: the search reads one array, not each target it passes */
+/* A second ordered index narrows texture candidates by mip height before searching their address range. A large
+   cube's memory spans many differently sized mip targets: an address-only query revisited all of them per bind. */
+typedef struct { u64 address; Surf* surface; u64 shape; } DrawShape;
+static struct {
+    DrawShape* drawn;
+    u64 content[256], generation;
+    /* Four spatial scales, 64 conservative hashed cells per shape. Small queries no longer
+       lose their candidates when an unrelated target of the same height is created/freed. */
+    u64 spatial[256][4][64];
+} g_shape;
+static u64 shape_key(u32 height, const VkFmt* f) {
+    return (u64)height << 8 | f->bpp | (u32)f->depth << 5 | (u32)f->stencil << 6;
+}
+static u32 shape_bucket(u64 key) { return (u32)((key * 0x9e3779b97f4a7c15ull) >> 56); }
+static void shape_wrote(const Surf* s) { g_shape.content[shape_bucket(shape_key(s->h, &s->f))]++; }
+static void shape_changed(const Surf* s) {
+    u32 bucket = shape_bucket(shape_key(s->h, &s->f));
+    u64 revision = ++g_shape.generation;
+    for (u32 level = 0; level < 4; level++)
+        g_shape.spatial[bucket][level][(s->drawn_from >> (16 + 4 * level)) & 63] = revision;
+}
 static int g_ndrawn, g_capdrawn;
+static int shape_lower(u64 key, u64 address, int count) {
+    int lo = 0, hi = count;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        DrawShape* s = &g_shape.drawn[mid];
+        if (s->shape < key || (s->shape == key && s->address < address)) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo;
+}
+u64 vk_rt_drawn_generation(void) { return g_shape.generation; }
 VkHot g_vk_hot;
 /* the first drawn target at or past address a */
 static int drawn_lower(u64 a) {
@@ -1105,6 +1135,9 @@ static void drawn_insert(Surf* s) {
         u64* k = realloc(g_drawn_key, (size_t)cap * sizeof *k);
         if (!k) return;
         g_drawn_key = k;
+        DrawShape* shapes = realloc(g_shape.drawn, (size_t)cap * sizeof *shapes);
+        if (!shapes) return;
+        g_shape.drawn = shapes;
         g_capdrawn = cap;
     }
     int at = drawn_lower(s->drawn_from);
@@ -1112,6 +1145,11 @@ static void drawn_insert(Surf* s) {
     memmove(&g_drawn_key[at + 1], &g_drawn_key[at], (size_t)(g_ndrawn - at) * sizeof *g_drawn_key);
     g_drawn[at] = s;
     g_drawn_key[at] = s->drawn_from;
+    u64 key = shape_key(s->h, &s->f);
+    int shape = shape_lower(key, s->drawn_from, g_ndrawn);
+    memmove(&g_shape.drawn[shape + 1], &g_shape.drawn[shape], (size_t)(g_ndrawn - shape) * sizeof *g_shape.drawn);
+    g_shape.drawn[shape] = (DrawShape){s->drawn_from, s, key};
+    shape_changed(s);
     g_ndrawn++;
     s->in_drawn = 1;
     pend_add_va(&g_drawn_pages, s->drawn_from, 1, 1);
@@ -1120,6 +1158,12 @@ static void drawn_remove(Surf* s) {
     int i = drawn_lower(s->drawn_from);
     while (i < g_ndrawn && g_drawn[i] != s) i++;
     if (i < g_ndrawn) {
+        u64 key = shape_key(s->h, &s->f);
+        int shape = shape_lower(key, s->drawn_from, g_ndrawn);
+        shape_changed(s);
+        while (shape < g_ndrawn && g_shape.drawn[shape].surface != s) shape++;
+        if (shape < g_ndrawn)
+            memmove(&g_shape.drawn[shape], &g_shape.drawn[shape + 1], (size_t)(g_ndrawn - shape - 1) * sizeof *g_shape.drawn);
         memmove(&g_drawn[i], &g_drawn[i + 1], (size_t)(g_ndrawn - i - 1) * sizeof *g_drawn);
         memmove(&g_drawn_key[i], &g_drawn_key[i + 1], (size_t)(g_ndrawn - i - 1) * sizeof *g_drawn_key);
         g_ndrawn--;
@@ -1260,6 +1304,67 @@ int vk_rt_drawn_in(u64 lo, u64 hi, Surf** out, int max) {
     return n;
 }
 
+static u64 texture_revision(const Surf* t, const u64 revisions[256]) {
+    u64 revision = 0;
+    u32 previous = 0;
+    for (u32 l = 0; l < t->levels; l++) {
+        u32 h = t->h >> l;
+        if (!h) h = 1;
+        h = (h + t->f.bh - 1) / t->f.bh;
+        if (h == previous) continue;
+        previous = h;
+        revision += revisions[shape_bucket(shape_key(h, &t->f))];
+    }
+    return revision;
+}
+
+/* A monotonically increasing maximum, so even a hashed-cell collision only causes
+   extra work. Every insertion/removal updates all scales before a source can die. */
+u64 vk_rt_texture_generation(const Surf* t) {
+    if (!t->size || t->size > (u64)-1 - t->gva) return g_shape.generation;
+    u64 last = t->gva + t->size - 1, revision = 0;
+    u32 scale = 0, shift = 16, previous = 0;
+    while (scale < 3 && (last >> shift) - (t->gva >> shift) >= 8) { scale++; shift += 4; }
+    if ((last >> shift) - (t->gva >> shift) >= 64) return g_shape.generation;
+    for (u32 l = 0; l < t->levels; l++) {
+        u32 height = t->h >> l;
+        if (!height) height = 1;
+        height = (height + t->f.bh - 1) / t->f.bh;
+        if (height == previous) continue;
+        previous = height;
+        u32 bucket = shape_bucket(shape_key(height, &t->f));
+        for (u64 cell = t->gva >> shift; cell <= (last >> shift); cell++) {
+            u64 changed = g_shape.spatial[bucket][scale][cell & 63];
+            if (changed > revision) revision = changed;
+        }
+    }
+    return revision;
+}
+u64 vk_rt_texture_content(const Surf* t) { return texture_revision(t, g_shape.content); }
+
+int vk_rt_drawn_texture(const Surf* t, Surf** out, int max) {
+    u64 hi = t->gva + t->size;
+    if (hi <= t->gva || !pend_hit_va(&g_drawn_pages, t->gva, t->size)) return 0;
+    int n = 0;
+    u32 previous = 0;
+    for (u32 level = 0; level < t->levels; level++) {
+        u32 height = t->h >> level;
+        if (!height) height = 1;
+        height = (height + t->f.bh - 1) / t->f.bh;
+        if (height == previous) continue;
+        previous = height;
+        u64 key = shape_key(height, &t->f);
+        int i = shape_lower(key, t->gva, g_ndrawn), from = i;
+        for (; i < g_ndrawn && g_shape.drawn[i].shape == key && g_shape.drawn[i].address < hi; i++) {
+            if (n < max) out[n] = g_shape.drawn[i].surface;
+            n++;
+        }
+        g_vk_hot.take_walked += (u64)(i - from);
+    }
+    g_vk_hot.take_found += (u64)n;
+    return n;
+}
+
 /* a surface's image and views go when the frame being recorded is done (descriptors in it may name them) */
 static void surf_free(Surf* s) {
     g_vk_surf_epoch++;
@@ -1274,6 +1379,7 @@ static void surf_free(Surf* s) {
     if (s->in_drawn) drawn_remove(s);
     for (int i = 0; i < s->nsv; i++) vk_defer_image(VK_NULL_HANDLE, VK_NULL_HANDLE, s->sv[i].v, VK_NULL_HANDLE);
     vk_defer_image(s->img, s->mem, s->att, s->att_linear);
+    free(s->take_targets);
     free(s);
 }
 /* a target holding a draw that memory doesn't have: it stays while its address is its own and memory wasn't written

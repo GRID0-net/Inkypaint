@@ -752,26 +752,36 @@ static void float_controls(void) {
 /* An FTZ instruction writing R64 must not certify R65-R67 as flushed. The broad
    may-write scan is conservative about clobbers, not proof of an actual store. */
 static void float_flush_adjacent_registers(void) {
-    for (u32 r = 65; r <= 67; r++) {
-        const u64 load = 0x0100000000071000ull | (1ull << 20) | r; /* smallest subnormal */
-        /* With the operand kept, 2^-149 * 2^126 becomes a normal 2^-23.
-           Console FTZ consumes zero instead, so the result must be zero. */
-        const u64 large = 0x0100000000071005ull | (0x7e800000ull << 20);
-        const u64 use = FMUL_FTZ | 8ull | ((u64)r << 8) | (5ull << 20);
-        const u64 harmless = FMUL_FTZ | (255ull << 8) | (255ull << 20);
-        const u64 plain[] = {load, large, harmless | 96ull, use};
-        const u64 adjacent[] = {load, large, harmless | 64ull, use};
-        ShaderInfo info;
-        size_t na = 0, nb = 0;
-        u32* a = translate(plain, 4, ST_FS, &info, &na, SH_FTZ_EMULATE);
-        check_translated(a, &info, "baseline subnormal operand translates");
-        u32* b = translate(adjacent, 4, ST_FS, &info, &nb, SH_FTZ_EMULATE);
-        check_translated(b, &info, "adjacent FTZ write translates");
-        if (a && b)
-            check(count_opcode(a, na, 184, 0xffffffffu) == count_opcode(b, nb, 184, 0xffffffffu),
-                  "writing R64 must keep the subnormal flush on an adjacent register");
-        free(a);
-        free(b);
+    const int stages[] = {ST_VS, ST_FS, ST_CS};
+    for (unsigned stage = 0; stage < sizeof stages / sizeof *stages; stage++) {
+        for (int mode = SH_FTZ_EMULATE; mode <= SH_FTZ_MODE; mode++) {
+            for (u32 r = 65; r <= 67; r++) {
+                const u64 load = 0x0100000000071000ull | (1ull << 20) | r; /* smallest subnormal */
+                /* With the operand kept, 2^-149 * 2^126 becomes normal 2^-23.
+                   Console FTZ consumes zero, so the result must be zero. */
+                const u64 large = 0x0100000000071005ull | (0x7e800000ull << 20);
+                const u64 use = FMUL_FTZ | 8ull | ((u64)r << 8) | (5ull << 20);
+                const u64 harmless = FMUL_FTZ | (255ull << 8) | (255ull << 20);
+                /* Desktop GPUs can expose a module-wide FTZ mode. A non-FTZ
+                   instruction still requires the per-instruction mixed path. */
+                const u64 keep = FADD_KEEP | 20ull | (255ull << 8) | (255ull << 20);
+                const u64 plain[] = {load, large, harmless | 96ull, use, keep};
+                const u64 adjacent[] = {load, large, harmless | 64ull, use, keep};
+                ShaderInfo info;
+                size_t na = 0, nb = 0;
+                u32* a = translate(plain, 5, stages[stage], &info, &na, mode);
+                check_translated(a, &info, "baseline subnormal operand translates");
+                u32* b = translate(adjacent, 5, stages[stage], &info, &nb, mode);
+                check_translated(b, &info, "adjacent FTZ write translates");
+                if (a && b) {
+                    check(info.fp32_preserve && info.fp32_flush, "mixed float modes are retained");
+                    check(count_opcode(a, na, 184, 0xffffffffu) == count_opcode(b, nb, 184, 0xffffffffu),
+                          "writing R64 must keep the subnormal flush on an adjacent register");
+                }
+                free(a);
+                free(b);
+            }
+        }
     }
 }
 
@@ -1470,6 +1480,34 @@ static void between_stages(void) {
 /* whether the module decorates a variable BuiltIn builtin */
 static int has_builtin(const u32* code, size_t words, u32 builtin) { return count_builtin(code, words, builtin) > 0; }
 
+/* A point program may write only varyings and rely on the default clip position.
+   Omitting Position drops the irradiance integration points on Vulkan. */
+static void default_vertex_position(void) {
+    const u64 varying = 0xeff07f800807ff00ull; /* AST a[0x80], R0; no position store */
+    for (int count = 0; count <= 1; count++) {
+        ShaderInfo info = {0};
+        size_t words = 0;
+        u32* code = translate(&varying, count, ST_VS, &info, &words, 1);
+        check_translated(code, &info, "a vertex program without position stores translates");
+        if (code) {
+            u32 position = 0, initial = 0;
+            for (size_t i = 5; i < words; i += code[i] >> 16) {
+                u32 op = code[i] & 0xffff, span = code[i] >> 16;
+                if (op == 71 && span == 4 && code[i + 2] == 11 && code[i + 3] == 0) position = code[i + 1];
+                if (op == 44 && span == 7 && is_constant_value(code, words, code[i + 3], 0) &&
+                    is_constant_value(code, words, code[i + 4], 0) && is_constant_value(code, words, code[i + 5], 0) &&
+                    is_constant_value(code, words, code[i + 6], 0x3f800000)) initial = code[i + 2];
+            }
+            int initialized = 0;
+            for (size_t i = 5; i < words; i += code[i] >> 16)
+                if ((code[i] & 0xffff) == 62 && code[i] >> 16 == 3 &&
+                    code[i + 1] == position && code[i + 2] == initial) initialized = 1;
+            check(position && initial && initialized, "unwritten vertex Position defaults to (0,0,0,1)");
+        }
+        free(code);
+    }
+}
+
 /* the layer takes ShaderLayer (the device's shaderOutputLayer) when a vertex program writes it, and a fragment
    program reads it with Geometry (geometryShader) or ShaderLayer. Without the capability the write is dropped and
    the read is 0, never a module the device can't take */
@@ -1520,7 +1558,8 @@ static void viewport_capabilities(void)
 		if (code) {
 			check(info.writes_viewport, "viewport writes request indexed dynamic state");
 			check(has_builtin(code, words, 10), "viewport index has its own scalar output");
-			check(!has_builtin(code, words, 0), "viewport index is not a position component");
+			check(has_builtin(code, words, 0) == (stages[i] == ST_VS),
+                              "viewport writes keep only the vertex stage default position");
 			check(count_opcode(code, words, 17, i == 2 ? 57 : 70) == 1, "viewport output declares the stage capability");
 		}
 		free(code);
@@ -1908,6 +1947,46 @@ static void gradients(void) {
 /* Texture forms compared with Eden's: TEXS's depth compares with a level (5, 6, 9), TLDS's multisample fetch with
    half results, TLD's multisample fetch in the bound form and its offsets on a 3D texture, TLD4's offset on a 1D
    texture, and TEX's LOD clamp, which is refused */
+/* Check emitted DescriptorSet decorations, not just the stage-to-set helper:
+   sampler separation must leave compute and the other graphics stages alone. */
+static void sampler_set_partition(void) {
+    const u64 sample[] = {0xc800000000000000ull | 7ull << 51 | 1ull << 54 | 0xfull << 31 |
+                         0x10ull << 36 | 4ull << 20 | 7ull << 16 | 2ull << 8};
+    u32 old = g_shader_texture_set_base;
+    const int stages[] = {ST_VS, ST_FS, ST_CS, ST_GS};
+    const u32 bases[] = {0, 2, 5};
+    for (unsigned b = 0; b < 3; b++)
+        for (unsigned st = 0; st < 4; st++) {
+            g_shader_texture_set_base = bases[b];
+            ShaderInfo info;
+            size_t words = 0;
+            const u32 geometry_sph[3] = {1u << 24, 7u << 24, 3};
+            u32* code = st == 3 ? translate_stage(sample, 1, ST_GS, geometry_sph, 3, &info, &words)
+                               : translate(sample, 1, stages[st], &info, &words, 0);
+            check_translated(code, &info, "sampler-set partition translates");
+            if (!code) continue;
+            u32* sets = calloc(code[3], sizeof *sets);
+            check(sets != NULL, "sampler-set decoration table");
+            if (sets) {
+                for (size_t i = 5; i < words; i += code[i] >> 16)
+                    if ((code[i] & 0xffff) == 71 && code[i] >> 16 == 4 && code[i + 2] == 34)
+                        sets[code[i + 1]] = code[i + 3] + 1;
+                int found = 0;
+                u32 expected = bases[b] && st < 2 ? bases[b] + (st == 1) : (u32)shader_vk_set(stages[st]);
+                for (size_t i = 5; i < words; i += code[i] >> 16)
+                    if ((code[i] & 0xffff) == 71 && code[i] >> 16 == 4 && code[i + 2] == 33 &&
+                        code[i + 3] >= SNX_VKB_TEX && code[i + 3] < SNX_VKB_IMG) {
+                        check(sets[code[i + 1]] == expected + 1, "sampler uses its material set");
+                        found++;
+                    }
+                check(found != 0, "partition fixture emitted a sampler");
+                free(sets);
+            }
+            free(code);
+        }
+    g_shader_texture_set_base = old;
+}
+
 static void texture_forms(void) {
 #define TEXS_W(fp32, encoding, a, b)                                                                                   \
     (0xd000000000000000ull | (u64)(fp32) << 59 | (u64)(encoding) << 53 | 0x10ull << 36 | 0xffull << 28 |               \
@@ -2741,12 +2820,14 @@ int main(int argc, char** argv) {
     nro_shader_modes();
     issue126_shader_modes();
     between_stages();
+    default_vertex_position();
     layer_capabilities();
     viewport_capabilities();
     fragment_queries();
     eden_forms();
     pexit_flow();
     gradients();
+    sampler_set_partition();
     texture_forms();
     arithmetic_forms();
     beyond_eden();

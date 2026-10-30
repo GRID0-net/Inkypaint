@@ -44,7 +44,7 @@ ApplicationWindow {
                     model: window.panes
                     delegate: Rectangle {
                         required property var modelData
-                        readonly property bool selected: app.pane === modelData.id
+                        readonly property bool selected: app.pane === modelData.id || (modelData.id === "settings" && ["keyboardInput", "controllerInput"].includes(app.pane))
                         Layout.fillWidth: true
                         height: 42
                         radius: 12
@@ -85,12 +85,14 @@ ApplicationWindow {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: ["play", "online", "settings", "mods", "files"].indexOf(app.pane)
+            currentIndex: ["play", "online", "settings", "mods", "files", "keyboardInput", "controllerInput"].indexOf(app.pane)
             PlayPage {}
             OnlinePage {}
             SettingsPage {}
             ModsPage {}
             FilesPage {}
+            SettingsPage { inputPage: "keyboard" }
+            SettingsPage { inputPage: "controller" }
         }
     }
 }

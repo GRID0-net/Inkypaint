@@ -313,6 +313,19 @@ static void mods_open(void) {
                  romfs[i], r);
     }
     snx_free_strings(romfs, count);
+    char** sd;
+    count = snx_mods_played(folder, g_settings.game_mods_off, "sdmc", &sd);
+    if (count) {
+        FsNode* root;
+        FsTreeResult r = fs_tree_mkdirs(&g_hle.fs.tree, "sdmc", &root);
+        if (r) WARN("fs: could not create the SD-card root (error %d)\n", r);
+        for (i = 0; !r && i < count; i++) {
+            FsTreeResult imported = fs_tree_overlay_directory(&g_hle.fs.tree, "sdmc", sd[i], 1);
+            if (imported) WARN("fs: mod SD-card data %s could not be indexed (error %d)\n", sd[i], imported);
+            else LOG("fs: mod SD-card data %s available at sdmc:/\n", sd[i]);
+        }
+    }
+    snx_free_strings(sd, count);
     free(built);
     free(stamp);
     free(folder);

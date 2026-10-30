@@ -471,6 +471,17 @@ static void test_graft(const char* scratch) {
     CHECK(fs_tree_graft(&other, "romfs", ram) == FS_TREE_EXISTS);
     CHECK(snprintf(path, sizeof path, "%s/no-such-directory", scratch) < (int)sizeof path);
     CHECK(fs_tree_graft(&other, "missing", path) != FS_TREE_OK);
+    /* Mod SD companions merge with the base SD root and retain writable host storage. */
+    OK(fs_tree_mkdirs(&other, "sdmc", &dir));
+    OK(fs_tree_create(&other, dir, "keep.bin", 0, 1, NULL));
+    OK(fs_tree_overlay_directory(&other, "sdmc", ram, 1));
+    OK(fs_tree_lookup(&other, NULL, "sdmc/keep.bin", &made));
+    OK(fs_tree_lookup(&other, NULL, "sdmc/sub", &dir));
+    CHECK(!dir->readonly);
+    OK(fs_tree_create(&other, dir, "config.ini", 0, 4, &made));
+    CHECK(!made->readonly);
+    OK(fs_tree_path(&other, made, path, sizeof path));
+    CHECK(strstr(path, "graft-ram/sub/config.ini") != NULL);
     scans_allowed = 0;
     CHECK(fs_tree_lookup(&other, NULL, "missing", &dir) == FS_TREE_NOTFOUND);
     OK(fs_tree_lookup(&other, NULL, "romfs/sub/file.bin", &file));

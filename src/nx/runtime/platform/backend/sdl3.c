@@ -21,7 +21,10 @@
 #endif
 #include "nx/runtime/platform/ui.h"
 #include "nx/runtime/platform/vpad.h"
+#include "nx/runtime/platform/mobile_motion.h"
 #include "nx/runtime/platform/gamepad.h"
+#include "nx/runtime/platform/kbm.h"
+#include "nx/runtime/inkypaint_ui.h"
 #include "common/utilities/pad_sdl.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +45,16 @@ static SDL_Window* g_win;
 /* the window's size in pixels, width | height << 32: the renderer reads it on its own thread, and one atomic keeps
    a width from one resize from pairing with the height of another */
 static u64 g_wsize = 1280 | (720ull << 32); /* atomic */
-static u64 keys_held;
+/* the mouse taken for aiming (kbm.c): the window holds it, hidden, and its movement turns the aim */
+static int g_mouse_taken;
+/* the game's menu is up (inkypaint_ui.c, kept a moment after it goes so a menu's change doesn't take the mouse), a
+   left click on it not yet handed over, and the mouse let go for it (taken back when it closes) */
+static int g_ui_menu, g_ui_click, g_ui_freed;
+static u64 g_ui_menu_ns;
+/* native_kbm (an experiment): the keys held by scancode (USB usage IDs), and the wheel turned since the last sample,
+   for the console's own keyboard and mouse devices */
+static u64 g_native_keys[4];
+static float g_native_wheel_x, g_native_wheel_y;
 static u64 g_menu_held;      /* keyboard, scripted and on-screen buttons held while the menu had them */
 static u64 g_menu_held_pad0; /* No1's physical pad, tracked separately so a replacement has fresh presses */
 static u64 g_menu_held_extra[SNX_GAMEPADS - 1];
@@ -394,18 +406,19 @@ int backend_vk_surface(VkInstance instance, VkSurfaceKHR* surface) {
     LOG("video: no Vulkan surface: %s\n", SDL_GetError());
     return 0;
 }
-/* F1's text. It follows keymap (the game's buttons), hotkey and menu_event (the runtime's keys): a binding changed there
-   changes here */
+/* F1's text. It follows kbm.c's default bindings (the game's buttons), hotkey and menu_event (the runtime's keys): a
+   binding changed there changes here */
 static const char* HELP =
     "Controller: A, B, X and Y sit where the console has them (gamepad_swap_ab=1 swaps A and B). "
     "Home opens the game's menu.\n\n"
-    "Keyboard, by key position on a US layout:\n"
-    "  Buttons      A: X or Space    B: Z    X: C    Y: V\n"
-    "  Shoulders    L: Q    R: E    ZL: 1    ZR: 3\n"
-    "  Plus, minus  +: Enter    -: Backspace\n"
+    "Keyboard and mouse, by default (the launcher's Settings rebind them):\n"
+    "  Move         W, A, S and D        Camera  I, J, K and L\n"
+    "  Aim          the mouse, once a click in the window takes it (turn the game's motion controls on)\n"
+    "  Shoot        left button    Sub weapon  right button    Special  E\n"
+    "  Swim         Left Shift     Jump  Space    Map  Tab    Camera behind you  R\n"
+    "  A            F or Enter     L  Q    L stick  C    Plus  P    Minus  M\n"
     "  D-Pad        the arrow keys\n"
-    "  Left stick   W, A, S and D\n"
-    "  Right stick  I, J, K and L\n\n"
+    "  Left Alt     let the mouse go, or take it again\n\n"
     "Runtime keys:\n"
     "  F1  this help\n"
     "  F2  open or close the game's menu (arrows move, Enter or Space picks, Esc or Backspace goes back)\n"
@@ -431,35 +444,6 @@ static PadKind gamepad_kind(int type) {
 /* keys -> HidNpadButton bits; 40..47 are the stick keys, turned into axes in video_poll. By scancode, the key's
    position: the keycode depends on the layout and on the modifiers, so Shift pressed while 1 was held made its release
    a different key, and ZL stayed held */
-static u64 keymap(SDL_Scancode k) {
-    switch (k) {
-        case SDL_SCANCODE_X:
-        case SDL_SCANCODE_SPACE: return 1ull << 0; /* A */
-        case SDL_SCANCODE_Z: return 1ull << 1;     /* B */
-        case SDL_SCANCODE_C: return 1ull << 2;     /* X */
-        case SDL_SCANCODE_V: return 1ull << 3;     /* Y */
-        case SDL_SCANCODE_Q: return 1ull << 6;     /* L */
-        case SDL_SCANCODE_E: return 1ull << 7;     /* R */
-        case SDL_SCANCODE_1: return 1ull << 8;     /* ZL */
-        case SDL_SCANCODE_3: return 1ull << 9;     /* ZR */
-        case SDL_SCANCODE_RETURN: return 1ull << 10;
-        case SDL_SCANCODE_BACKSPACE: return 1ull << 11;
-        case SDL_SCANCODE_LEFT: return 1ull << 12;
-        case SDL_SCANCODE_UP: return 1ull << 13;
-        case SDL_SCANCODE_RIGHT: return 1ull << 14;
-        case SDL_SCANCODE_DOWN: return 1ull << 15;
-        case SDL_SCANCODE_A: return 1ull << 40;
-        case SDL_SCANCODE_W: return 1ull << 41;
-        case SDL_SCANCODE_D: return 1ull << 42;
-        case SDL_SCANCODE_S: return 1ull << 43;
-        case SDL_SCANCODE_J: return 1ull << 44;
-        case SDL_SCANCODE_I: return 1ull << 45;
-        case SDL_SCANCODE_L: return 1ull << 46;
-        case SDL_SCANCODE_K: return 1ull << 47;
-        default: break;
-    }
-    return 0;
-}
 
 /* g_fullscreen follows the window: also set from the fullscreen events, for a change the window manager made */
 static void set_fullscreen(int on) {
@@ -817,6 +801,7 @@ static void hotkey(SDL_Keycode k) {
 #if defined(SNX_TRACY)
         case SDLK_F7: snx_tracy_capture_now(); break;
 #endif
+        case SDLK_F9: inkypaint_ui_census_request(); break;
         case SDLK_F11: set_fullscreen(!g_fullscreen); break;
     }
 }
@@ -832,7 +817,7 @@ static u64 finger_id(const SDL_TouchFingerEvent* f) {
 static void menu_open(int open) {
     if (overlay_shown() != open) overlay_toggle();
     vpad_release();
-    keys_held = 0;
+    kbm_release_all();
     /* a finger or button down before this (Home on the on-screen controls opened it) lifts without a tap */
     overlay_pointers_reset();
 }
@@ -964,6 +949,7 @@ static void touch_finger(const SDL_Event* e) {
 /* the mouse's left button as one more finger: on the on-screen controls when they are on, and on the touch screen
    when the touch option asks for it; positions come in window points */
 static void touch_mouse(const SDL_Event* e) {
+    if (!kbm_enabled()) return;
     int picture[4], safe[4], taken = 0;
     float d = SDL_GetWindowPixelDensity(g_win);
     backend_window_safe(&safe[0], &safe[1], &safe[2], &safe[3]);
@@ -1112,6 +1098,161 @@ static int press_event(const SDL_Event* e) {
     }
     return 0;
 }
+/* native_kbm: the console's own mouse and keyboard devices as the PC's are now (hid.h's MouseInput and
+   KeyboardInput): where the pointer is over the game's picture in its 1280x720, what moved since the last sample.
+   Under input_lock */
+static void native_kbm_publish(void) {
+    MouseInput* m = &g_hle.hid.mouse;
+    KeyboardInput* k = &g_hle.hid.keyboard;
+    static SDL_MouseButtonFlags blocked_buttons;
+    static SDL_Keymod blocked_modifiers;
+    SDL_MouseButtonFlags physical_buttons = SDL_GetMouseState(NULL, NULL);
+    SDL_Keymod physical_modifiers = SDL_GetModState();
+    blocked_buttons &= physical_buttons;
+    blocked_modifiers &= physical_modifiers;
+    if (!kbm_enabled()) {
+        blocked_buttons |= physical_buttons;
+        blocked_modifiers |= physical_modifiers;
+    }
+    if (!g_settings.native_keyboard_and_mouse || !g_win || !kbm_enabled()) {
+        m->valid = k->valid = 0;
+        SDL_GetRelativeMouseState(NULL, NULL);
+        g_native_wheel_x = g_native_wheel_y = 0;
+        return;
+    }
+    float x, y, rx, ry, d = SDL_GetWindowPixelDensity(g_win);
+    int picture[4];
+    SDL_MouseButtonFlags b = SDL_GetMouseState(&x, &y) & ~blocked_buttons;
+    SDL_Keymod mod = SDL_GetModState() & ~blocked_modifiers;
+    SDL_GetRelativeMouseState(&rx, &ry);
+    touch_window(picture);
+    if (picture[2] > 0 && picture[3] > 0) {
+        m->x = (i32)((x * d - (float)picture[0]) * 1280.0f / (float)picture[2]);
+        m->y = (i32)((y * d - (float)picture[1]) * 720.0f / (float)picture[3]);
+        m->x = m->x < 0 ? 0 : m->x > 1279 ? 1279 : m->x;
+        m->y = m->y < 0 ? 0 : m->y > 719 ? 719 : m->y;
+    }
+    m->dx = (i32)rx;
+    m->dy = (i32)ry;
+    /* a notch is 120, as the console's wheel reports it */
+    m->wheel_x = (i32)(g_native_wheel_x * 120.0f);
+    m->wheel_y = (i32)(g_native_wheel_y * 120.0f);
+    g_native_wheel_x = g_native_wheel_y = 0;
+    m->buttons = ((b & SDL_BUTTON_LMASK) ? 1u : 0) | ((b & SDL_BUTTON_RMASK) ? 2u : 0) | ((b & SDL_BUTTON_MMASK) ? 4u : 0) |
+                 ((b & SDL_BUTTON_X2MASK) ? 8u : 0) | ((b & SDL_BUTTON_X1MASK) ? 16u : 0);
+    m->valid = 1;
+    memcpy(k->keys, g_native_keys, sizeof k->keys);
+    k->modifiers = ((mod & SDL_KMOD_CTRL) ? 1u : 0) | ((mod & SDL_KMOD_SHIFT) ? 2u : 0) | ((mod & SDL_KMOD_LALT) ? 4u : 0) |
+                   ((mod & SDL_KMOD_RALT) ? 8u : 0) | ((mod & SDL_KMOD_GUI) ? 16u : 0) | ((mod & SDL_KMOD_CAPS) ? 256u : 0) |
+                   ((mod & SDL_KMOD_SCROLL) ? 512u : 0) | ((mod & SDL_KMOD_NUM) ? 1024u : 0);
+    k->valid = 1;
+}
+/* Mouse aim (kbm.c): a left click in the window takes the mouse while mouse aim is on and neither the menu nor the
+   controls' edit mode has it; Free the mouse's key, the menu or another window lets it go. Taken, its movement turns
+   the aim and its buttons and wheel press what they are bound to; let go, it is the pointer (the menu's, the
+   on-screen controls', the game's touch screen) */
+static int mouse_takeable(void) {
+    return kbm_enabled() && g_win && g_settings.mouse_aim && !overlay_shown() && !vpad_editing() &&
+           (SDL_GetWindowFlags(g_win) & SDL_WINDOW_INPUT_FOCUS) && !g_ui_menu;
+}
+static void mouse_take(int on) {
+    on = on != 0;
+    if (on == g_mouse_taken || !g_win) return;
+    if (!SDL_SetWindowRelativeMouseMode(g_win, on)) {
+        WARN("input: the mouse can't be %s: %s\n", on ? "taken for aiming" : "let go", SDL_GetError());
+        if (on) return;
+    }
+    g_mouse_taken = on;
+    for (int b = 1; b <= 5; b++) kbm_input(KBM_MOUSE + b, 0); /* a button held across stays up */
+}
+/* 1 when the mouse's event was the aim's, or the game's menu's (inkypaint_ui.c): there the left button clicks the
+   button under the pointer, the others press what they are bound to */
+static int aim_event(const SDL_Event* e) {
+    if (!kbm_enabled()) return 0;
+    if (!g_mouse_taken && g_ui_menu && (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN || e->type == SDL_EVENT_MOUSE_BUTTON_UP) &&
+        e->button.which != SDL_TOUCH_MOUSEID && !overlay_shown() && !vpad_editing()) {
+        if (e->button.button == SDL_BUTTON_LEFT) {
+            if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN) g_ui_click = 1;
+        } else
+            kbm_input(KBM_MOUSE + e->button.button, e->type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+        return 1;
+    }
+    if (g_mouse_taken) {
+        switch (e->type) {
+            case SDL_EVENT_MOUSE_MOTION: kbm_mouse_moved(e->motion.xrel, e->motion.yrel); return 1;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (kbm_input(KBM_MOUSE + e->button.button, e->type == SDL_EVENT_MOUSE_BUTTON_DOWN)) mouse_take(0);
+                return 1;
+            case SDL_EVENT_MOUSE_WHEEL:
+                kbm_wheel(e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e->wheel.y : e->wheel.y);
+                return 1;
+            default: return 0;
+        }
+    }
+    if (e->type == SDL_EVENT_MOUSE_BUTTON_DOWN && e->button.which != SDL_TOUCH_MOUSEID &&
+        e->button.button == SDL_BUTTON_LEFT && mouse_takeable()) {
+        mouse_take(1); /* the click that takes it presses nothing */
+        return 1;
+    }
+    return 0;
+}
+/* All keyboard/mouse game sources drop their holds together when a physical controller takes over. */
+static void input_priority(void) {
+    kbm_controller_activity(gamepad_active(), plat_ns());
+    if (!kbm_enabled()) {
+        mouse_take(0);
+        memset(g_native_keys, 0, sizeof g_native_keys);
+        touch_set(TOUCH_UP, SNX_TOUCH_MOUSE, NULL, 0, 0);
+        ui_lock();
+        vpad_up(SNX_TOUCH_MOUSE);
+        ui_unlock();
+        g_ui_click = 0;
+    }
+}
+/* the game's menus and the mouse: let go while one is up, the pointer handed to inkypaint_ui.c (in its layout space,
+   1920x1080 around the picture's center, y up) for the buttons it presses */
+static u64 ui_pointer(int menu_had) {
+    static float last_x = -1, last_y = -1;
+    float mx, my, nx = -1, ny = -1, d;
+    int picture[4], inside, moved, click = g_ui_click;
+    u64 now = plat_ns();
+    g_ui_click = 0;
+    if (!g_win) {
+        g_ui_menu = 0;
+        kbm_set_menu(0);
+        return 0;
+    }
+    if (inkypaint_ui_menu_active()) {
+        g_ui_menu = 1;
+        g_ui_menu_ns = now;
+    } else if (g_ui_menu && now - g_ui_menu_ns > 400000000ull)
+        g_ui_menu = 0;
+    gamepad_set_context(inkypaint_ui_menu_active(), inkypaint_ui_interaction_active());
+    kbm_set_menu(g_ui_menu); /* the menus' keys while one is up */
+    if (g_ui_menu && g_mouse_taken) {
+        mouse_take(0);
+        g_ui_freed = 1;
+    } else if (!g_ui_menu && g_ui_freed) {
+        g_ui_freed = 0;
+        if (mouse_takeable()) mouse_take(1);
+    }
+    if (!g_ui_menu) return 0;
+    d = SDL_GetWindowPixelDensity(g_win);
+    SDL_GetMouseState(&mx, &my);
+    touch_window(picture);
+    if (picture[2] > 0 && picture[3] > 0) {
+        nx = (mx * d - (float)picture[0]) / (float)picture[2];
+        ny = (my * d - (float)picture[1]) / (float)picture[3];
+    }
+    inside = kbm_enabled() && g_settings.mouse_in_menus && !g_mouse_taken && !menu_had && !overlay_shown() && !vpad_editing() && nx >= 0 && nx <= 1 && ny >= 0 &&
+             ny <= 1 && (SDL_GetWindowFlags(g_win) & SDL_WINDOW_MOUSE_FOCUS) &&
+             (SDL_GetWindowFlags(g_win) & SDL_WINDOW_INPUT_FOCUS);
+    moved = mx != last_x || my != last_y;
+    last_x = mx;
+    last_y = my;
+    return inkypaint_ui_pointer(nx * 1920.0f - 960.0f, 540.0f - ny * 1080.0f, inside, moved, click && inside);
+}
 void video_poll(void) {
     SDL_Event e;
     char* left = __atomic_load_n(&g_fatal_left, __ATOMIC_ACQUIRE);
@@ -1122,12 +1263,28 @@ void video_poll(void) {
     }
     /* the menu had the controls when this poll began: the press that closes it (B) is in this poll's state */
     int menu_had = overlay_shown() || vpad_editing();
+    SDL_PumpEvents();
+    gamepad_set_context(inkypaint_ui_menu_active(), inkypaint_ui_interaction_active());
+    input_priority();
     while (!g_opt_headless && SDL_PollEvent(&e)) {
+        if (e.type == SDL_EVENT_MOUSE_WHEEL) {
+            g_native_wheel_x += e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.x : e.wheel.x;
+            g_native_wheel_y += e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -e.wheel.y : e.wheel.y;
+        }
+        if ((e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) && e.key.scancode < 256) {
+            u64 bit = 1ull << (e.key.scancode & 63);
+            if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && kbm_enabled())
+                g_native_keys[e.key.scancode >> 6] |= bit;
+            else if (e.type == SDL_EVENT_KEY_UP)
+                g_native_keys[e.key.scancode >> 6] &= ~bit;
+        }
+        if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) memset(g_native_keys, 0, sizeof g_native_keys);
         if (e.type == SDL_EVENT_GAMEPAD_SENSOR_UPDATE) { /* every reading, for the frame's mean (gamepad_motion) */
             gamepad_sensor_event(e.gsensor.which, e.gsensor.sensor, e.gsensor.data);
             continue;
         }
         if (press_event(&e)) continue;
+        if (aim_event(&e)) continue;
         if (overlay_event(&e)) continue;
         switch (e.type) {
             case SDL_EVENT_QUIT: g_quit = 1; break;
@@ -1171,13 +1328,14 @@ void video_poll(void) {
                 }
                 /* not with Ctrl, Alt or the system key: Alt+F4 also arrives as F4 on Windows */
                 if (!e.key.repeat && !(e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))) hotkey(e.key.key);
-                /* a repeat doesn't press again: a key held as the menu closed (which cleared keys_held) stays from
-                   the game until it is let go */
-                if (!e.key.repeat) keys_held |= keymap(e.key.scancode);
+                /* a repeat doesn't press again: a key held as the menu closed (which let go of every key) stays from
+                   the game until it is let go. Free the mouse's key lets the mouse go, or takes it back */
+                if (!e.key.repeat && kbm_input(e.key.scancode, 1)) mouse_take(!g_mouse_taken && mouse_takeable());
                 break;
-            case SDL_EVENT_KEY_UP: keys_held &= ~keymap(e.key.scancode); break;
+            case SDL_EVENT_KEY_UP: kbm_input(e.key.scancode, 0); break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
-                keys_held = 0;
+                kbm_release_all();
+                mouse_take(0);
                 ui_lock();
                 vpad_release();
                 overlay_pointers_reset(); /* lifts that come without their presses don't tap the menu */
@@ -1199,7 +1357,11 @@ void video_poll(void) {
     }
     /* the scripted presses act like keys, stick keys included. Bits 16..23 (the stick directions as buttons) can be
        scripted too, but the stick keys (40..47) are no npad buttons */
-    u64 s = unattended_buttons(), k = keys_held | s;
+    /* the menu, the controls' edit mode, or mouse aim turned off: the mouse is the pointer again */
+    if (g_mouse_taken && (menu_had || overlay_shown() || vpad_editing() || !g_settings.mouse_aim)) mouse_take(0);
+    input_priority();
+    u64 ui = ui_pointer(menu_had);
+    u64 s = unattended_buttons(), k = kbm_buttons() | s | ui;
     u64 nonpad = (k & 0xFFFFull) | (s & 0xFF0000ull), b;
     i32 st[4], pad[4], pad0[4];
     u64 pb;
@@ -1241,8 +1403,16 @@ void video_poll(void) {
         player->rx = one_sticks[2];
         player->ry = one_sticks[3];
         gamepad_motion(i, player->motion);
+        if (i == 0) mobile_motion_sample(g_win, !connected && !g_hidden, &player->motion[0]);
+        if (i == 0) { /* the mouse aims as player 1's controller turning (kbm.c) */
+            static u64 last;
+            u64 now = SDL_GetTicksNS();
+            kbm_motion(&player->motion[0], last ? now - last : 16666667u);
+            last = now;
+        }
         if (i == 0) memcpy(pad0, one_sticks, sizeof pad0);
     }
+    native_kbm_publish();
     gamepad_state(&pb, pad); /* the combined state drives the menu and its held-control display */
     if (!lx && !ly) {
         lx = pad0[0];

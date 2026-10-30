@@ -19,6 +19,9 @@ void gamepad_detect(u32 id);
 /* all open gamepads together, for the game's controller overlay and legacy callers */
 void gamepad_state(u64* buttons, i32 sticks[4]);
 void gamepad_state_slot(int slot, u64* buttons, i32 sticks[4]);
+void gamepad_set_context(int menu, int interaction); /* menu takes precedence; interactions swap AB only */
+void gamepad_set_menu(int active); /* detected game UI, independent of mouse settings */
+int gamepad_active(void); /* actual physical buttons/triggers or sticks outside their dead zone */
 int gamepad_slot_type(int slot); /* SDL_GamepadType, or SDL_GAMEPAD_TYPE_UNKNOWN */
 int gamepad_slot_connected(int slot);
 u32 gamepad_slot_id(int slot); /* SDL joystick instance ID, 0 for an empty slot */

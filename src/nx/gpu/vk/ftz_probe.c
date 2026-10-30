@@ -38,7 +38,7 @@ static int probe_same(u32 got, u32 want) {
 }
 
 /* 1 when every result is the console's; 0 when one isn't, or the probe couldn't run */
-int vk_ftz_native(void) {
+static int ftz_probe(int mode) {
     VkDescriptorSetLayoutBinding binding = {.binding = 0,
                                             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                             .descriptorCount = 1,
@@ -51,7 +51,8 @@ int vk_ftz_native(void) {
                                       .poolSizeCount = 1,
                                       .pPoolSizes = &pool_size};
     VkShaderModuleCreateInfo mi = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = ftz_probe_spv_size, .pCode = ftz_probe_spv};
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = mode ? ftz_mode_probe_spv_size : ftz_probe_spv_size,
+        .pCode = mode ? ftz_mode_probe_spv : ftz_probe_spv};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                              .size = 6 * PROBE_N * sizeof(u32),
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT};
@@ -141,8 +142,8 @@ int vk_ftz_native(void) {
             u32 got = words[(3 + k) * PROBE_N + i], want = g_probe[i][3 + k];
             if (!probe_same(got, want)) {
                 if (native)
-                    LOG("vulkan: FP32 subnormals: %s of %08x, %08x and %08x gave %08x where the console gives %08x\n",
-                        k == 0 ? "a * b" : k == 1 ? "a + c" : "fma", g_probe[i][0], g_probe[i][1], g_probe[i][2],
+                    LOG("vulkan: FP32 subnormals (%s): %s of %08x, %08x and %08x gave %08x where the console gives %08x\n",
+                        mode ? "declared FTZ" : "native", k == 0 ? "a * b" : k == 1 ? "a + c" : "fma", g_probe[i][0], g_probe[i][1], g_probe[i][2],
                         got, want);
                 native = 0;
             }
@@ -160,3 +161,6 @@ out:
     if (dlayout) vkDestroyDescriptorSetLayout(g_vk.dev, dlayout, NULL);
     return native;
 }
+
+int vk_ftz_native(void) { return ftz_probe(0); }
+int vk_ftz_mode(void) { return ftz_probe(1); }

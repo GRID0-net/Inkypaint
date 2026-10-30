@@ -14,6 +14,7 @@ QStringList list(const QString& folder);
 bool isOff(const QString& off, const QString& name);
 QString setOff(const QString& off, const QString& name, bool isOff);
 /// What a mod brings: files over the game's RomFS, and code the recompile has to take
+bool hasSdmc(const QString& mod);
 bool hasRomfs(const QString& mod);
 bool hasCode(const QString& mod);
 /// snx_mods_stamp's value for the mods played: 16 hex digits, "" when none of them changes the code. The recompile
@@ -25,10 +26,12 @@ QString recorded(const QString& abiFile);
 /// Where a download keeps its mods: every folder under base that holds a romfs/ or an exefs/ (the folder itself,
 /// ModName/romfs, atmosphere/contents/<title ID>/romfs...), shallowest first, none inside another
 QStringList roots(const QString& base);
+/// Promote a single nested payload in an installed wrapper; never overwrite an existing payload.
+QString normalizeInstalled(const QString& mod);
 /// A mod's folder name from a download's: no path separators, no leading dot, the title ID folder replaced by
 /// fallback, and unused in folder (" 2", " 3"... added)
 QString freeName(const QString& folder, const QString& wanted, const QString& fallback);
 /// Copies root's romfs/ and exefs/ (whatever case they are named in) into the new mod folder to, through a hidden
 /// folder renamed at the end, so the runtime never sees half a mod. False with *error set when it can't
-bool install(const QString& root, const QString& to, QString* error);
+bool install(const QString& root, const QString& to, QString* error, const QString& packageBase = {});
 } // namespace ModFiles

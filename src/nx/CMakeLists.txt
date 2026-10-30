@@ -35,7 +35,7 @@ endfunction()
 
 snx_component(core runtime/main.c runtime/maintenance.c runtime/arm.c runtime/loader.c runtime/rtapi.c runtime/clock.c runtime/crash.c runtime/options.c
               runtime/startup.c runtime/gdbstub.c runtime/present.c runtime/guest_jit.c
-              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c)
+              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_graphics.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c runtime/inkypaint_ui.c)
 target_link_libraries(snx_core PRIVATE snx_driver snx_lz4 snx_build_info)
 target_link_libraries(snx_core PUBLIC snx_settings_runtime) # the game's .ini's tables (cmake/settings.cmake)
 if(APPLE)
@@ -81,7 +81,7 @@ target_link_libraries(snx_gpu PRIVATE snx_llvm)
 include("${PROJECT_SOURCE_DIR}/cmake/controls_atlas.cmake")
 include("${PROJECT_SOURCE_DIR}/cmake/gui_themes.cmake")
 set(platform runtime/platform/plat.c runtime/platform/unattended.c runtime/platform/backend/sdl3.c
-             runtime/platform/backend/gamepad.c runtime/platform/tracy.c
+             runtime/platform/backend/gamepad.c runtime/platform/backend/mobile_motion.c runtime/platform/backend/kbm.c runtime/platform/tracy.c
              runtime/platform/overlay.c runtime/platform/touch.c runtime/platform/ui.c runtime/platform/vpad.c
              runtime/platform/fatal_screen.c runtime/platform/prepare_screen.c
              "${CMAKE_BINARY_DIR}/generated/controls_png.c")
@@ -141,6 +141,8 @@ snx_glsl_spirv(snx_vk SOURCE gpu/video/vic.comp NAME vic_unaligned_spv HEADER nx
 snx_glsl_spirv(snx_vk SOURCE gpu/vk/query_predicate.comp NAME query_predicate_spv
                HEADER nx/gpu/vk/query_predicate_spv.h)
 snx_glsl_spirv(snx_vk SOURCE gpu/vk/ftz_probe.comp NAME ftz_probe_spv HEADER nx/gpu/vk/ftz_probe_spv.h)
+snx_glsl_spirv(snx_vk SOURCE gpu/vk/ftz_probe.comp NAME ftz_mode_probe_spv
+               HEADER nx/gpu/vk/ftz_probe_spv.h DEFINES SNX_PROBE_FTZ_MODE=1)
 set(components core kernel hle video gpu platform shader vk)
 # third-party code (vma.cpp is VMA's implementation), cmake/dependencies.cmake
 set_source_files_properties("${volk_SOURCE_DIR}/volk.c" gpu/vk/vma.cpp PROPERTIES COMPILE_OPTIONS
@@ -168,10 +170,16 @@ if(IOS)
     # the app (dist/apple): the menu and then the game it plays, in the one process an iOS app has
     set_target_properties(scarletnx PROPERTIES MACOSX_BUNDLE ON
                           MACOSX_BUNDLE_INFO_PLIST "${PROJECT_SOURCE_DIR}/dist/apple/Info-iOS.plist"
-                          MACOSX_BUNDLE_GUI_IDENTIFIER org.scarletnx
-                          MACOSX_BUNDLE_BUNDLE_NAME ScarletNX
+                          MACOSX_BUNDLE_GUI_IDENTIFIER org.inkypaint.mobile
+                          MACOSX_BUNDLE_BUNDLE_NAME inkypaint
                           MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1
                           MACOSX_BUNDLE_BUNDLE_VERSION 1)
+endif()
+if(SNX_IOS_AOT_ONLY)
+    add_custom_command(TARGET scarletnx POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:scarletnx>/Frameworks"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${SNX_IOS_GAME_FRAMEWORK}"
+            "$<TARGET_BUNDLE_DIR:scarletnx>/Frameworks/InkypaintGame.framework" VERBATIM)
 endif()
 list(TRANSFORM components PREPEND snx_)
 add_library(scarletnx-nx STATIC)

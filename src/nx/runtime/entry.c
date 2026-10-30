@@ -69,6 +69,13 @@ int snx_switch_main(int argc, char** argv) {
         return snx_gui_migrate(argv[0], argv[1]);
     }
 #endif
+#if defined(SNX_MENU_THEN_GAME) && defined(SNX_IOS_AOT_ONLY)
+    gui_apple_start();
+    if (argc == 1) {
+        char* play[] = {argv[0], "--game=recompiled/0100C2500FC20000", NULL};
+        return snx_main(2, play);
+    }
+#endif
     result = snx_driver(argc, argv);
     if (result >= 0) return result;
 #ifdef SNX_MENU_THEN_GAME

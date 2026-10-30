@@ -24,9 +24,12 @@ void ModsModel::refresh() {
     for (const QString& name : ModFiles::list(dir)) {
         if (name.startsWith(grid0Prefix)) continue;
         QString mod = QDir(dir).filePath(name);
+        const QString issue = ModFiles::normalizeInstalled(mod);
         mods_.append(QVariantMap{{"name", name},
+                                 {"issue", issue},
                                  {"on", !ModFiles::isOff(off, name)},
                                  {"romfs", ModFiles::hasRomfs(mod)},
+                                 {"sdmc", ModFiles::hasSdmc(mod)},
                                  {"code", ModFiles::hasCode(mod)}});
     }
     // the code the game was recompiled with, against the code mods played now (GRID0+'s included)
@@ -115,7 +118,7 @@ void ModsModel::add(const QString& source) {
                                    "files in romfs/ (and code patches in exefs/).";
             for (const QString& root : roots) {
                 QString name = ModFiles::freeName(mods, root == base ? fallback : QFileInfo(root).fileName(), fallback);
-                if (!ModFiles::install(root, QDir(mods).filePath(name), &error)) break;
+                if (!ModFiles::install(root, QDir(mods).filePath(name), &error, base)) break;
                 added << name;
             }
         }

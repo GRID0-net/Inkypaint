@@ -88,7 +88,7 @@ PageScroll {
                 }
                 InkText {
                     text: mods.busy ? "Adding the mod…"
-                        : "Or drop a mod here. inkypaint finds its romfs and exefs folders inside, including the atmosphere/contents/0100C2500FC20000 layout. Mods load in name order: where two change the same file, the later one wins."
+                        : "Or drop a mod here. inkypaint finds its romfs and exefs folders inside, including atmosphere/contents/0100C2500FC20000. For SD bundles, add the whole folder or archive containing atmosphere and its companion folders (such as flexlion3). Mods load in name order: where two change the same file, the later one wins."
                     kind: "caption"
                     Layout.fillWidth: true
                 }
@@ -125,10 +125,10 @@ PageScroll {
                         InkText {
                             kind: "caption"
                             Layout.fillWidth: true
-                            text: modelData.code && modelData.romfs ? "Files and code: the code takes a recompile"
+                            text: modelData.issue ? modelData.issue : modelData.sdmc ? (modelData.code ? "Code and SD-card data: the code takes a recompile" : "SD-card data: no recompile needed") : modelData.code && modelData.romfs ? "Files and code: the code takes a recompile"
                                 : modelData.code ? "Code: takes a recompile"
                                 : modelData.romfs ? "Files: no recompile needed"
-                                : "Nothing inkypaint can use (no romfs or exefs)"
+                                : (modelData.issue || "No supported romfs/exefs files. Re-add the original mod folder or archive.")
                         }
                     }
                     InkSwitch { checked: modelData.on; enabled: !app.playing; onToggled: mods.setOn(modelData.name, checked) }

@@ -29,9 +29,12 @@ renderer=opengl
 
 ## Now
 
+`dynamic_resolution` and `dynamic_resolution_min` are active again for scene scaling through the game's renderer.
+They are saved under `[Graphics]`. They no longer select the old OpenGL feature.
+
 | Old | Replaced by | Now | How it is told |
 |---|---|---|---|
-| `.ini` keys `renderer`, `dynamic_resolution`, `dynamic_resolution_min`, `game_dynamic_resolution`, `low_priority_shader_compiler`, `smooth_recording`, `recording_fps`, `lsfg`, `lsfg_dll`, `lsfg_target`, `lsfg_multiplier`, `lsfg_flow`, `lsfg_resolution`, `lossless_scaling`, `lossless_path` | Remove the OpenGL renderer | nothing: they went with it | under `[Deprecated]`, named once a run |
+| `.ini` keys `renderer`, `game_dynamic_resolution`, `low_priority_shader_compiler`, `smooth_recording`, `recording_fps`, `lsfg`, `lsfg_dll`, `lsfg_target`, `lsfg_multiplier`, `lsfg_flow`, `lsfg_resolution`, `lossless_scaling`, `lossless_path` | Remove the OpenGL renderer | nothing: they went with it | under `[Deprecated]`, named once a run |
 | `.ini` key `audio_device` | [gpu/audio] Fix viewport flips and audio playback | playback follows the system's default | the same |
 | `.ini` key `forced_vsync` | Remove the OpenGL renderer | `vsync` | the same |
 | `.ini` keys `touch_controls`, `touch_controls_opacity` | [runtime] Isolate shared core and NX runtime | `controls`, `controls_opacity` | the same |

@@ -7,6 +7,9 @@
    has no DenormFlushToZero. CMake compiles it into SPIR-V at build time (cmake/glsl.cmake). */
 #extension GL_EXT_spirv_intrinsics : require
 spirv_execution_mode(extensions = ["SPV_KHR_float_controls"], capabilities = [4466], 4461, 32);
+#ifdef SNX_PROBE_FTZ_MODE
+spirv_execution_mode(extensions = ["SPV_KHR_float_controls"], capabilities = [4465], 4460, 32);
+#endif
 layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
 
 /* a, b and c for each of the 8 invocations, then the products, sums and fused results */

@@ -474,6 +474,7 @@ extern const unsigned char snx_armlib_bitcode[];
 extern const unsigned long snx_armlib_bitcode_size;
 
 static int library_object(const char* name, const unsigned char* bitcode, unsigned long bitcode_size, char opt,
+                          const char* triple,
                           unsigned char** data, size_t* size, char* error, size_t error_size) {
     static const char* const target_attributes[] = {"target-cpu", "target-features", "tune-cpu", "probe-stack"};
     SnxIr* ir;
@@ -484,7 +485,7 @@ static int library_object(const char* name, const unsigned char* bitcode, unsign
     int rc;
     *data = NULL;
     *size = 0;
-    ir = snx_ir_new(name, opt, error, error_size);
+    ir = triple ? snx_ir_new_target(name, opt, triple, error, error_size) : snx_ir_new(name, opt, error, error_size);
     if (!ir) return -1;
     /* The embedded bitcode has process lifetime. Parsing it needs a view, not
        another heap allocation and copy of the complete runtime library. */
@@ -513,10 +514,17 @@ static int library_object(const char* name, const unsigned char* bitcode, unsign
     return rc;
 }
 int snx_ir_rtlib_object(char opt, unsigned char** data, size_t* size, char* error, size_t error_size) {
-    return library_object("rtlib", snx_rtlib_bitcode, snx_rtlib_bitcode_size, opt, data, size, error, error_size);
+    return library_object("rtlib", snx_rtlib_bitcode, snx_rtlib_bitcode_size, opt, NULL, data, size, error, error_size);
 }
 int snx_ir_armlib_object(char opt, unsigned char** data, size_t* size, char* error, size_t error_size) {
-    return library_object("armlib", snx_armlib_bitcode, snx_armlib_bitcode_size, opt, data, size, error, error_size);
+    return library_object("armlib", snx_armlib_bitcode, snx_armlib_bitcode_size, opt, NULL, data, size, error, error_size);
 }
 
 char* snx_ir_text(SnxIr* ir) { return LLVMPrintModuleToString(ir->mod); }
+
+/* An offline iOS framework needs its helpers in Mach-O for the same target,
+   rather than an ELF object that the app relocates into executable memory. */
+int snx_ir_rtlib_object_target(char opt, const char* triple, unsigned char** data, size_t* size,
+                               char* error, size_t error_size) {
+    return library_object("rtlib", snx_rtlib_bitcode, snx_rtlib_bitcode_size, opt, triple, data, size, error, error_size);
+}

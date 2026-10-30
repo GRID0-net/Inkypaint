@@ -413,7 +413,7 @@ static void vibrations(SvcObj* h, const u32* handles, const float (*values)[4], 
     CHECK(r.c.out_size == 0);
 }
 static void test_vibration(SvcObj* h) {
-    /* No1's Pro Controller (style index 3), the left device then the right one */
+    /* docked: No1's Pro Controller (style index 3), the left device then the right one */
     static const u32 both[2] = {0x00000003u, 0x00010003u};
     static const float values[2][4] = {{0.25f, 160, 0, 320}, {1.5f, 160, 0.5f, 320}};
     vibration(h, 0x00000003u, 0.5f, 1.0f);
@@ -596,6 +596,11 @@ static void test_hid(void) {
     CHECK(npad_latest_buttons(8, HO_HidNpadInternalState_handheld_lifo) == 1ull << 3);
     CHECK(npad_latest_buttons(8, HO_HidNpadInternalState_full_key_lifo) == 1ull << 3);
     g_hle.hid.pad1.buttons = 0;
+    /* handheld, player 1 is the Handheld Npad alone: No1 is empty, so one press is never two Npads' */
+    CHECK(no1_style() == 0 && npad_style_at(8) == 1u << 1);
+    /* docked, No1 is player 1's */
+    g_settings.tv_mode = 1;
+    hid_update();
     CHECK(get_styles(h) == 0x7F); /* every style until the game says which it takes */
     CHECK(no1_style() == 1);      /* No1 is a Pro Controller */
     KEvent* no1 = style_event(h, 0);
@@ -622,6 +627,7 @@ static void test_hid(void) {
     set_styles(h, 0x7F);
     test_vibration(h);
     test_npad_players(h);
+    g_settings.tv_mode = 0;
     svcobj_unref(h);
     close_handles();
     /* the service's own references: everything it made goes with them */

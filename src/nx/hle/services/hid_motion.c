@@ -40,7 +40,12 @@ static void normalize4(float q[4]) {
 }
 
 /* SetGyroscope: the bias taken off, clamped, the bias learned at rest, a reading under the threshold none */
-static void set_gyroscope(HidMotionState* m, const float raw[3], const float accel[3], float gyro[3]) {
+static void set_gyroscope(HidMotionState* m, const float raw[3], const float accel[3], float gyro[3], int exact) {
+    if (exact) { /* a made sensor's (the mouse's): no bias to learn, and every turn is meant */
+        for (int i = 0; i < 3; i++) gyro[i] = clampf(raw[i], GYRO_MAX);
+        if (length3(gyro) > 0.0f) m->only_accelerometer = 0;
+        return;
+    }
     for (int i = 0; i < 3; i++) gyro[i] = clampf(raw[i] - m->gyro_bias[i], GYRO_MAX);
     if (!moving(gyro, accel, AT_REST_RELAXED))
         for (int i = 0; i < 3; i++) m->gyro_bias[i] = m->gyro_bias[i] * 0.9999f + raw[i] * 0.0001f;
@@ -179,7 +184,7 @@ void hid_motion_sample(HidMotionState* state, const PadMotion* motion, u64 dt_ns
             state->only_accelerometer = 1;
             state->started = 1;
         }
-        set_gyroscope(state, motion->angular_velocity, acc, gyro);
+        set_gyroscope(state, motion->angular_velocity, acc, gyro, motion->exact);
         update_rotation(state, gyro, period);
         update_orientation(state, acc, gyro, period);
         direction(state, dir);

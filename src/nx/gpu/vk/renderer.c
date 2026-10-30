@@ -13,6 +13,7 @@
 #include <string.h>
 #include "nx/runtime/main.h"
 #include "nx/runtime/inkypaint_display.h"
+#include "nx/runtime/inkypaint_graphics.h"
 #include "nx/runtime/options.h"
 #include "nx/gpu/gpu.h"
 #include "nx/hle/services/nvdrv.h"
@@ -90,7 +91,7 @@ static void vkr_mapping_end(void) {
 /* 0 when Vulkan can't run here */
 static int vkr_start(void) {
     if (!vk_init()) return 0;
-    g_vk_scale = g_settings.resolution_scale;       /* the .ini keeps resolution within 0.25 to 4 (options.c) */
+    g_vk_scale = inkypaint_graphics_engine_scale() ? 1.f : g_settings.resolution_scale;       /* the .ini keeps resolution within 0.25 to 4 (options.c) */
     g_vk_anisotropy = g_settings.anisotropic_filtering; /* the sampler table keeps what it makes: anisotropy applies at start */
     if (g_vk_anisotropy > 1 && !g_vk.feat.samplerAnisotropy)
         LOG("vulkan: this GPU has no anisotropic filtering, so anisotropy=%d does nothing\n", g_vk_anisotropy);
@@ -203,6 +204,12 @@ static int vkr_nvdec_write(const NvdecPic* p) { return vk_nvdec_write(p); }   /*
 static void* vkr_nvdec_hw_device(void) { return vk_nvdec_hw_device(); }
 static int vkr_dma_copy(const GpuDmaOp* o) { return vk_dma_copy(o); }         /* it takes vk_lock */
 static int vkr_blit_mem(const GpuBlit* b) { return vk_blit_mem(b); }          /* it takes vk_lock */
+static void vkr_rt_cpu_read(u64 cpu_addr, u64 size) {
+    /* The alias-aware writeback used before a producer overwrites guest memory
+       also makes that memory current for a CPU consumer. It waits only for dirty
+       images covering these bytes; already-landed results need no further copy. */
+    vk_rt_before_write_cpu(cpu_addr, size);
+}
 static void vkr_rt_flush(u64 gva) {
     vk_lock();
     vk_gfx_image_mem_need(gva, 1);
@@ -446,7 +453,7 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                                     .dstOffsets = {{dx, dy, 0}, {dx + (i32)dw, dy + (i32)dh, 1}}};
                 flip_src(&blit, transform); /* render targets stay in guest order */
                 rec_CmdBlitImage(cb, src->img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, g_settings.presentation_filter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
             }
             {
                 int safe[4] = {(int)cx, (int)cy, (int)cw, (int)ch};
@@ -554,13 +561,17 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
                     VkHot h = g_vk_hot;
                     u32 ep = __atomic_load_n(&g_vk_epoch, __ATOMIC_RELAXED);
                     LOG("vulkan: a frame: %.1f submit epochs; texture binds %.0f from the memo, %.0f looked up; %.0f "
-                        "textures over drawn targets (%.1f entries walked, %.1f targets found); target memory "
+                        "textures over drawn targets (%.1f entries walked, %.1f targets found, %.1f cached, %.1f unchanged); target memory "
                         "hashed whole %.1f times (%.1f MB), sampled %.1f, known %.1f; index ranges scanned %.0f "
                         "(%.2f MB), known %.0f\n",
                         (ep - epoch_was) / 600.0, h.memo_hit / 600.0, h.memo_miss / 600.0, h.take / 600.0,
-                        h.take_walked / 600.0, h.take_found / 600.0, h.mh_full / 600.0,
+                        h.take_walked / 600.0, h.take_found / 600.0, h.take_cached / 600.0, h.take_static / 600.0, h.mh_full / 600.0,
                         h.mh_full_bytes / 600.0 / 1048576.0, h.mh_sampled / 600.0, h.mh_kept / 600.0,
                         h.top_scan / 600.0, h.top_scan_bytes / 600.0 / 1048576.0, h.top_kept / 600.0);
+                    LOG("vulkan: constant buffers per frame: %.1f reused, %.1f shared-cache matches, %.1f fetched\n",
+                        h.cb_kept / 600.0, h.cb_shared / 600.0, h.cb_fetch / 600.0);
+                    LOG("vulkan: descriptors written per frame: %.1f buffers, %.1f images/samplers\n",
+                        h.descriptor_buffers / 600.0, h.descriptor_images / 600.0);
                     epoch_was = ep;
                     memset(&g_vk_hot, 0, sizeof g_vk_hot);
                 }
@@ -821,6 +832,7 @@ const Renderer vk_renderer = {
     .nvdec_hw_device = vkr_nvdec_hw_device,
     .dma_copy = vkr_dma_copy,
     .blit_mem = vkr_blit_mem,
+    .rt_cpu_read = vkr_rt_cpu_read,
     .rt_flush = vkr_rt_flush,
     .rt_reload = vkr_rt_reload,
     .dispatch = vkr_dispatch,

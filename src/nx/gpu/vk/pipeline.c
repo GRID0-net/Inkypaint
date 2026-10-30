@@ -198,8 +198,28 @@ int vk_cb_reads_hold(const VkCbReads* reads, VkCbReader read) {
 
 u32 g_vk_buffer_image_slots;
 
+static struct {
+    u32 per_set[VK_POOL_TYPES];
+    u32 dynamic_cbufs, dynamic_mask;
+    VkDescriptorSetLayout split[2][4]; /* VS/FS buffers, then VS/FS samplers */
+    VkPipelineLayout compute_layout;
+} g_descriptor_pool;
+VkPipelineLayout vk_compute_playout(void) { return g_descriptor_pool.compute_layout; }
+VkDescriptorSetLayout vk_graphics_dslayout(u32 arrays, int stage, int textures) {
+    int slot = shader_vk_set(stage);
+    if (g_shader_texture_set_base && slot < 2)
+        return g_descriptor_pool.split[arrays != 0][slot + (textures ? 2 : 0)];
+    return g_vk_dslayout[arrays != 0][slot];
+}
+u32 vk_dynamic_cbuf_count(void) { return g_descriptor_pool.dynamic_cbufs; }
+int vk_dynamic_cbuf_index(u32 binding) {
+    if (binding >= 18 || !(g_descriptor_pool.dynamic_mask & (1u << binding))) return -1;
+    return __builtin_popcount(g_descriptor_pool.dynamic_mask & ((1u << binding) - 1));
+}
+
 /* descriptors of each type in one set: the binding ranges in shader.h */
 static VkDescriptorType binding_type(u32 i) {
+    if (i < 18 && (g_descriptor_pool.dynamic_mask & (1u << i))) return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     if (i == SNX_VKB_SMAP) return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     if (i == SNX_VKB_TEXARRAY || i == SNX_VKB_TEXDEPTH) return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     if (i == SNX_VKB_TEXFUNCS || i == SNX_VKB_TEXMAP) return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -212,12 +232,10 @@ static VkDescriptorType binding_type(u32 i) {
 }
 /* Maximum descriptors actually present in a stage layout. Disabled texture arrays must not reserve hundreds of
    thousands of unused image/sampler descriptors in every 1024-set pool. */
-static struct {
-    u32 per_set[VK_POOL_TYPES];
-} g_descriptor_pool;
+
 static const VkDescriptorType descriptor_types[VK_POOL_TYPES] = {
     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER};
+    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC};
 void vk_pool_sizes(VkDescriptorPoolSize* sz, u32 sets) {
     for (u32 k = 0; k < VK_POOL_TYPES; k++)
         sz[k] = (VkDescriptorPoolSize){descriptor_types[k],
@@ -230,12 +248,17 @@ VkPipelineLayout vk_playout(u32 arrays) {
     if (made) return made;
     pm_lock(&g_playout_lock);
     if (!*l) {
-        VkDescriptorSetLayout sets[5];
-        for (u32 s = 0; s < g_vk_stage_sets; s++) sets[s] = g_vk_dslayout[(arrays >> s) & 1][s];
+        VkDescriptorSetLayout sets[7];
+        for (u32 s = 0; s < g_vk_stage_sets; s++)
+            sets[s] = g_shader_texture_set_base && s < 2 ? g_descriptor_pool.split[(arrays >> s) & 1][s]
+                                                       : g_vk_dslayout[(arrays >> s) & 1][s];
+        if (g_shader_texture_set_base)
+            for (u32 s = 0; s < 2; s++)
+                sets[g_shader_texture_set_base + s] = g_descriptor_pool.split[(arrays >> s) & 1][s + 2];
         /* push constants: viewport/depth pc[0..3] at 0, fragment alpha test pc[4..6] and sprite T flip pc[7] at 16 */
         VkPushConstantRange pc = {VK_PUSH_STAGES, 0, 32};
         VkPipelineLayoutCreateInfo pl = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                                         .setLayoutCount = g_vk_stage_sets,
+                                         .setLayoutCount = g_vk_stage_sets + (g_shader_texture_set_base ? 2 : 0),
                                          .pSetLayouts = sets,
                                          .pushConstantRangeCount = 1,
                                          .pPushConstantRanges = &pc};
@@ -258,6 +281,21 @@ void vk_pipeline_init(void) {
                                               VK_SHADER_STAGE_GEOMETRY_BIT};
     /* the tessellation and geometry stages' sets come after the first two, where the device binds that many */
     g_vk_stage_sets = g_vk.props.limits.maxBoundDescriptorSets >= 5 ? 5 : 2;
+    g_shader_texture_set_base = g_vk.props.limits.maxBoundDescriptorSets >= g_vk_stage_sets + 2 ? g_vk_stage_sets : 0;
+    const char* split = getenv("INKYPAINT_SPLIT_TEXTURE_SETS");
+    if (split && !strcmp(split, "0")) g_shader_texture_set_base = 0;
+    LOG("vulkan: material texture descriptor sets %s\n", g_shader_texture_set_base ? "separate from draw buffers" : "shared");
+    g_descriptor_pool.dynamic_cbufs = g_vk.props.limits.maxDescriptorSetUniformBuffersDynamic / g_vk_stage_sets;
+    if (g_descriptor_pool.dynamic_cbufs > VK_DYNAMIC_CBUFS) g_descriptor_pool.dynamic_cbufs = VK_DYNAMIC_CBUFS;
+    const char* dynamic_cbufs = getenv("INKYPAINT_DYNAMIC_CBUFS");
+    if (dynamic_cbufs && !strcmp(dynamic_cbufs, "0")) g_descriptor_pool.dynamic_cbufs = 0;
+    /* Draw constants and the material/light banks change far more often than
+       bindings 1 and 2. Spend the device's limited dynamic slots on these banks. */
+    static const u32 priority[VK_DYNAMIC_CBUFS] = {0, 3, 4, 5};
+    for (u32 i = 0; i < g_descriptor_pool.dynamic_cbufs; i++)
+        g_descriptor_pool.dynamic_mask |= 1u << priority[i];
+    LOG("vulkan: %u dynamic constant-buffer bindings per shader stage (mask %x)\n",
+        g_descriptor_pool.dynamic_cbufs, g_descriptor_pool.dynamic_mask);
     for (int s = 0; s < 5; s++) {
         VkDescriptorSetLayoutBinding b[SNX_VKB_END];
         u32 count = 0;
@@ -301,6 +339,24 @@ void vk_pipeline_init(void) {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = n, .pBindings = b};
             if (!VK_OK(vkCreateDescriptorSetLayout(g_vk.dev, &dl, NULL, &g_vk_dslayout[arrays][s])))
                 fatal("vulkan: cannot create shader descriptor layout");
+            if (g_shader_texture_set_base && s < 2) {
+                for (u32 textures = 0; textures < 2; textures++) {
+                    VkDescriptorSetLayoutBinding part[SNX_VKB_END];
+                    u32 npart = 0;
+                    for (u32 j = 0; j < n; j++)
+                        if ((b[j].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) == (int)textures &&
+                            (b[j].stageFlags & ~VK_SHADER_STAGE_COMPUTE_BIT)) {
+                            part[npart] = b[j];
+                            part[npart++].stageFlags &= ~VK_SHADER_STAGE_COMPUTE_BIT;
+                        }
+                    VkDescriptorSetLayoutCreateInfo info = {
+                        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                        .bindingCount = npart, .pBindings = part};
+                    if (!VK_OK(vkCreateDescriptorSetLayout(g_vk.dev, &info, NULL,
+                            &g_descriptor_pool.split[arrays][s + textures * 2])))
+                        fatal("vulkan: cannot create material descriptor layout");
+                }
+            }
             for (u32 k = 0; k < VK_POOL_TYPES; k++) {
                 u32 descriptors = 0;
                 for (u32 j = 0; j < n; j++)
@@ -313,10 +369,10 @@ void vk_pipeline_init(void) {
         VkDescriptorPoolSize n[VK_POOL_TYPES];
         vk_pool_sizes(n, 1);
         LOG("vulkan: descriptor pools reserve %u uniform buffers, %u storage buffers, %u samplers, %u images and "
-            "%u texel buffers per set\n", n[0].descriptorCount, n[1].descriptorCount, n[2].descriptorCount,
+            "%u texel buffers per set\n", n[0].descriptorCount + n[5].descriptorCount, n[1].descriptorCount, n[2].descriptorCount,
             n[3].descriptorCount, n[4].descriptorCount);
         const VkPhysicalDeviceLimits* l = &g_vk.props.limits;
-        if (n[0].descriptorCount > l->maxPerStageDescriptorUniformBuffers ||
+        if (n[0].descriptorCount + n[5].descriptorCount > l->maxPerStageDescriptorUniformBuffers ||
             n[1].descriptorCount > l->maxPerStageDescriptorStorageBuffers ||
             n[2].descriptorCount > l->maxPerStageDescriptorSamplers ||
             n[2].descriptorCount > l->maxPerStageDescriptorSampledImages ||
@@ -325,16 +381,32 @@ void vk_pipeline_init(void) {
                 l->maxPerStageResources)
             WARN("vulkan: a stage's descriptor set (%u uniform and %u storage buffers, %u textures, %u images) is "
                  "past this GPU's per-stage limits (%u, %u, %u, %u): pipelines may fail\n",
-                 n[0].descriptorCount, n[1].descriptorCount, n[2].descriptorCount, n[3].descriptorCount,
+                 n[0].descriptorCount + n[5].descriptorCount, n[1].descriptorCount, n[2].descriptorCount, n[3].descriptorCount,
                  l->maxPerStageDescriptorUniformBuffers, l->maxPerStageDescriptorStorageBuffers,
                  l->maxPerStageDescriptorSamplers, l->maxPerStageDescriptorStorageImages);
     }
     LOG("vulkan: indexed textures %s\n", g_shader_texture_arrays ? "through texture arrays"
                                                                    : "read as their table's first texture (no arrays)");
+    VkPushConstantRange compute_pc = {VK_PUSH_STAGES, 0, 32};
+    VkPipelineLayoutCreateInfo compute_info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &g_vk_dslayout[0][0],
+        .pushConstantRangeCount = 1, .pPushConstantRanges = &compute_pc};
+    if (!VK_OK(vkCreatePipelineLayout(g_vk.dev, &compute_info, NULL, &g_descriptor_pool.compute_layout)))
+        fatal("vulkan: cannot create compute pipeline layout");
     g_vk_playout = vk_playout(0);
     if (!g_vk_playout) fatal("vulkan: cannot create shader pipeline layout");
     snprintf(g_cache_dir, sizeof g_cache_dir, "%sshader_cache", g_cachedir);
     plat_mkdir(g_cache_dir);
+    /* Dynamic buffer bindings change the resource-binding ABI. Start both the
+       translated shader records and native driver libraries in a fresh namespace;
+       the earlier static-UBO cache must not seed the new pipeline layout. Preserve
+       the old files for runtimes that still use that layout. */
+    if (g_descriptor_pool.dynamic_cbufs || g_shader_texture_set_base) {
+        snprintf(g_cache_dir, sizeof g_cache_dir, "%sshader_cache/descriptors-v2-d%u-t%u", g_cachedir,
+                 g_descriptor_pool.dynamic_cbufs, g_shader_texture_set_base);
+        plat_mkdir(g_cache_dir);
+    }
+    LOG("vulkan: shader cache directory %s\n", g_cache_dir);
     snprintf(g_pcache_path, sizeof g_pcache_path, "%s/vk_pipelines.bin", g_cache_dir);
     snx_path_native(g_pcache_path);
     /* the temporary name is the process's own: two games running at once would otherwise write the same file */
@@ -354,9 +426,19 @@ void vk_pipeline_init(void) {
     if (ci.initialDataSize) LOG("vulkan: pipeline cache loaded (%zu KB)\n", ci.initialDataSize >> 10);
     plat_file_unmap(&data); /* the cache copied it, and a mapped file can't be replaced on Windows */
     /* how shaders get the console's FP32 flush to zero, settled before the reading thread translates any */
-    if (g_vk_flush_denorm)
-        g_vk_ftz = SH_FTZ_MODE;
-    else if (g_vk_preserve_infnan && vk_ftz_native()) {
+    const char* force_soft = getenv("SNX_FORCE_SOFT_FTZ");
+    if (force_soft && force_soft[0] && strcmp(force_soft, "0")) {
+        g_vk_ftz = SH_FTZ_EMULATE;
+        LOG("vulkan: FP32 per-instruction FTZ forced by SNX_FORCE_SOFT_FTZ\n");
+    } else if (g_vk_flush_denorm) {
+        if (vk_ftz_mode()) {
+            g_vk_ftz = SH_FTZ_MODE;
+            LOG("vulkan: FP32 DenormFlushToZero execution mode verified\n");
+        } else {
+            g_vk_ftz = SH_FTZ_EMULATE;
+            WARN("vulkan: advertised FP32 DenormFlushToZero failed verification; using per-instruction FTZ\n");
+        }
+    } else if (g_vk_preserve_infnan && vk_ftz_native()) {
         g_vk_ftz = SH_FTZ_NATIVE;
         LOG("vulkan: this GPU flushes FP32 subnormals as the console's FTZ instructions do, so shaders are translated "
             "without a flush of their own\n");
@@ -1505,6 +1587,8 @@ static void pf_key(char* out, size_t n, size_t* guest) {
                   (u32)g_vk.has_provoking_last,
                   g_vk_stage_sets,
                   g_vk_buffer_image_slots,
+                  g_descriptor_pool.dynamic_mask,
+                  g_shader_texture_set_base,
                   d->limits.maxPerStageDescriptorStorageImages,
                   d->limits.maxDescriptorSetStorageImages};
     for (int i = 0; i < 16; i++) snprintf(uuid + 2 * i, 3, "%02x", d->pipelineCacheUUID[i]);

@@ -127,6 +127,7 @@ typedef struct {
 /* Device capabilities the renderer sets before translating: */
 /* sampled image arrays indexed per invocation (non-uniform indexing) */
 extern int g_shader_texture_arrays;
+extern u32 g_shader_texture_set_base; /* VS/FS sampler sets, 0 when sharing their buffer sets */
 /* tessellation and geometry programs may write the point size (shaderTessellationAndGeometryPointSize) */
 extern int g_shader_stage_point_size;
 /* vertex and tessellation programs may write the layer (shaderOutputLayer, the ShaderLayer capability); without it
@@ -166,6 +167,7 @@ extern unsigned long long g_shader_flow_structured, g_shader_flow_loops;
 #define SNX_SH_NOT_LAST (1u << 31)
 /* the descriptor set of a stage's bindings */
 int shader_vk_set(int stage);
+int shader_vk_texture_set(int stage);
 /* can_flush: how the module gets the console's FP32 flush to zero (FTZ on FADD, FMUL and FFMA). SH_FTZ_EMULATE: a
    test and a select on each such operand and result; SH_FTZ_MODE: the DenormFlushToZero execution mode, in a module
    whose every such instruction flushes; SH_FTZ_NATIVE: neither, on a device that flushes them by itself (vk/ftz_probe.c) */

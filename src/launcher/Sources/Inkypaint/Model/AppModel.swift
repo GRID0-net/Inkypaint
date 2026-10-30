@@ -5,12 +5,14 @@ import Foundation
 import Observation
 
 enum Pane: String, Hashable, CaseIterable, Identifiable {
-    case play, online, settings, mods, files
+    case play, online, settings, mods, files, keyboardInput, controllerInput
     var id: String { rawValue }
     var title: String {
         switch self {
         case .play: "Play"
         case .online: "Online"
+        case .keyboardInput: "Keyboard input"
+        case .controllerInput: "Controller input"
         case .settings: "Settings"
         case .mods: "Mods"
         case .files: "Game Files"
@@ -20,6 +22,8 @@ enum Pane: String, Hashable, CaseIterable, Identifiable {
         switch self {
         case .play: "gamecontroller.fill"
         case .online: "person.2.fill"
+        case .keyboardInput: "keyboard"
+        case .controllerInput: "gamecontroller"
         case .settings: "slider.horizontal.3"
         case .mods: "puzzlepiece.extension.fill"
         case .files: "externaldrive.fill"

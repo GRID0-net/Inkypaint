@@ -3,14 +3,15 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-Switch {
+AbstractButton {
     id: control
     hoverEnabled: true
-    indicator: Rectangle {
+    checkable: true
+    padding: 0
+    Accessible.role: Accessible.CheckBox
+    background: Rectangle {
         implicitWidth: 46
         implicitHeight: 26
-        x: control.width - width
-        y: (control.height - height) / 2
         radius: 13
         color: control.checked ? Theme.lime : Qt.rgba(1, 1, 1, 0.16)
         border.color: Theme.glassBorder
@@ -25,5 +26,8 @@ Switch {
         }
     }
     contentItem: Item {}
+    // as wide as the track it draws, so a layout leaves it its room
+    implicitWidth: 46
+    implicitHeight: 26
     opacity: enabled ? 1 : 0.45
 }

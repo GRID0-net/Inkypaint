@@ -115,7 +115,7 @@ int snx_setting_known(const char* key) { return find_row(key, NULL) || unattende
 /* ---- the file's values, the command line's, and the menu's waiting to be written ---- */
 
 #define KEY_MAX 64
-#define STORE_MAX 128
+#define STORE_MAX 512 /* the .ini has some 150 keys: the keyboard's bindings alone are 25 */
 #define VALUE_MAX 2048
 #define OVERRIDE_MAX 64
 #define PENDING_MAX 64

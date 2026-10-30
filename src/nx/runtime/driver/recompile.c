@@ -45,6 +45,7 @@ static void usage(void) {
     printf("  --chunk N              Instructions per code unit, whole functions batched (default: %d)\n",
            SNX_CHUNK_INSTRUCTIONS);
     puts("  --target auto|linux|win64  The host only: modules are built for the machine that builds them\n"
+         "  --target ios-aot       A native iOS library, bundled and signed in the app; no executable-memory loader\n"
          "  --target ios           A pack of objects for the iOS app, which loads them into JIT memory (docs/APPLE.md)\n"
          "  --no-build             Stage data/INI only, generate no code\n"
          "  --tmpfs                Leave the RomFS in the extraction (in tmpfs), which the game reads it from");
@@ -487,10 +488,10 @@ int snx_recompile_game(int argc, char** argv, const SnxPaths* paths) {
         compile.target_win = 1;
     else if (!strcmp(target, "linux"))
         compile.target_win = 0;
-    else if (!strcmp(target, "ios"))
+    else if (!strcmp(target, "ios") || !strcmp(target, "ios-aot"))
         ios = 1;
     else if (strcmp(target, "auto"))
-        return snx_error("--target %s: not auto, linux, win64 or ios", target);
+        return snx_error("--target %s: not auto, linux, win64, ios or ios-aot", target);
     /* The backends write the module for the machine they run on (build == host == target) */
     if (compile.target_win != host_win)
         return snx_error("--target %s: modules are built for this host only (%s)", target,
@@ -649,11 +650,12 @@ int snx_recompile_game(int argc, char** argv, const SnxPaths* paths) {
         snx_error("--target ios: 32-bit games are not supported yet");
         goto done;
     }
-    code = ios ? snx_format("%s_code.snxobj", base) : snx_format("%s_code.%s", base, compile.target_win ? "dll" : "so");
+    code = !strcmp(target, "ios-aot") ? snx_format("%s_code.dylib", base) : ios ? snx_format("%s_code.snxobj", base) : snx_format("%s_code.%s", base, compile.target_win ? "dll" : "so");
     {
         char *kept = keep_c ? snx_format("%s_build", base) : NULL, *units = NULL;
         llvm.output = code;
-        llvm.triple = ios ? SNX_IOS_TRIPLE : NULL;
+        llvm.native_library = !strcmp(target, "ios-aot");
+        llvm.triple = llvm.native_library ? "arm64-apple-ios16.0" : ios ? SNX_IOS_TRIPLE : NULL;
         llvm.opt = compile.opt[0];
         snx_ir_slp_vectorizer(g_settings.slp_vectorizer);
         llvm.tuning = snx_llvm_tuning(llvm.opt, error, sizeof error);

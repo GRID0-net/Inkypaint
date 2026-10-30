@@ -44,6 +44,19 @@ enum ModFiles {
         if isOff { names.append(name) }
         return names.joined(separator: "/")
     }
+    private static func sdCompanions(_ root: URL, within boundary: URL) -> [URL] {
+        let contents = root.deletingLastPathComponent(), atmosphere = root.deletingLastPathComponent().deletingLastPathComponent()
+        let base: URL
+        if contents.lastPathComponent.lowercased() == "contents" && atmosphere.lastPathComponent.lowercased() == "atmosphere" {
+            base = atmosphere.deletingLastPathComponent()
+        } else if isDir(root.appendingPathComponent("flexlion3")) { base = root }
+        else { return [] }
+        let limit = boundary.standardizedFileURL.path
+        guard base.path != "/", base.path == limit || base.path.hasPrefix(limit + "/") else { return [] }
+        let excluded = ["atmosphere", "contents", "romfs", "exefs", "sdmc", "nintendo", "__macosx"]
+        return entries(base).filter { !$0.hasPrefix(".") && !excluded.contains($0.lowercased()) && isDir(base.appendingPathComponent($0)) }.map { base.appendingPathComponent($0) }
+    }
+    static func hasSdmc(_ mod: URL) -> Bool { isDir(mod.appendingPathComponent("sdmc")) }
     static func hasRomfs(_ mod: URL) -> Bool { isDir(mod.appendingPathComponent("romfs")) }
     static func hasCode(_ mod: URL) -> Bool {
         let exefs = mod.appendingPathComponent("exefs")
@@ -91,16 +104,17 @@ enum ModFiles {
     /// Where a download keeps its mods: every folder under base that holds a romfs/ or an exefs/ (the folder itself,
     /// ModName/romfs, atmosphere/contents/<title ID>/romfs...), shallowest first, none inside another
     static func roots(_ base: URL) -> [URL] {
+        if ["romfs", "exefs", "sdmc"].contains(base.lastPathComponent.lowercased()), isDir(base) { return [base.deletingLastPathComponent()] }
         var found: [URL] = [], queue: [(URL, Int)] = [(base, 0)], i = 0
-        while i < queue.count {
+        while i < queue.count && i < 4096 {
             let (dir, depth) = queue[i]
             i += 1
             let children = entries(dir).sorted(by: byBytes)
-            if children.contains(where: { ["romfs", "exefs"].contains($0.lowercased()) && isDir(dir.appendingPathComponent($0)) }) {
+            if children.contains(where: { ["romfs", "exefs", "sdmc"].contains($0.lowercased()) && isDir(dir.appendingPathComponent($0)) }) {
                 found.append(dir)
                 continue
             }
-            guard depth < 6 else { continue }
+            guard depth < 16 else { continue }
             for c in children where c != "__MACOSX" && !c.hasPrefix(".") && isDir(dir.appendingPathComponent(c)) {
                 queue.append((dir.appendingPathComponent(c), depth + 1))
             }
@@ -121,15 +135,59 @@ enum ModFiles {
         while fm.fileExists(atPath: folder.appendingPathComponent(free).path) { free = "\(name) \(n)"; n += 1 }
         return free
     }
+    /// Promote a single nested installed payload without deleting its wrapper or overwriting files.
+    static func normalizeInstalled(_ mod: URL) -> String? {
+        let payloads = hasRomfs(mod) || hasCode(mod) || hasSdmc(mod) ? [mod] : roots(mod)
+        guard payloads.count == 1 else { return "No usable romfs/exefs at \(mod.path). Re-add the original folder or archive." }
+        let root = payloads[0].standardizedFileURL, base = mod.standardizedFileURL
+        guard root.path == base.path || root.path.hasPrefix(base.path + "/") else { return "The mod payload is outside its installed folder." }
+        let companions = sdCompanions(root, within: base)
+        do {
+            for part in entries(root) where ["romfs", "exefs", "sdmc"].contains(part.lowercased()) {
+                let source = root.appendingPathComponent(part), target = base.appendingPathComponent(part.lowercased())
+                if source.path == target.path || FileManager.default.fileExists(atPath: target.path) { continue }
+                guard isDir(source) else { return "The mod payload is a link. Add the original folder instead." }
+                try FileManager.default.moveItem(at: source, to: target)
+            }
+            for companion in companions {
+                let sd = base.appendingPathComponent("sdmc"), target = sd.appendingPathComponent(companion.lastPathComponent)
+                try fm.createDirectory(at: sd, withIntermediateDirectories: true)
+                guard !fm.fileExists(atPath: target.path) else { return "Duplicate SD companion folder: \(target.path)." }
+                try fm.moveItem(at: companion, to: target)
+            }
+        } catch { return "Couldn't normalize mod folders: \(error.localizedDescription)" }
+        return hasRomfs(mod) || hasCode(mod) || hasSdmc(mod) ? nil : "No supported files at \(mod.path)."
+    }
+
+    private static func copyPayload(_ source: URL, _ destination: URL) throws {
+        let from = source.resolvingSymlinksInPath().standardizedFileURL.path
+        let to = destination.resolvingSymlinksInPath().standardizedFileURL.path
+        guard isDir(source), from != to, !to.hasPrefix(from + "/") else {
+            throw NSError(domain: "Inkypaint.Mods", code: 2, userInfo: [NSLocalizedDescriptionKey: "The mod source is a link or contains the installation folder. Add the original bundle from another folder."])
+        }
+        try fm.copyItem(at: source, to: destination)
+    }
+
     /// Copies root's romfs/ and exefs/ (whatever their case) into the new mod folder to, through a hidden folder
     /// renamed at the end, so the runtime never sees half a mod
-    static func install(_ root: URL, to: URL) throws {
+    static func install(_ root: URL, to: URL, packageBase: URL? = nil) throws {
+        let boundary = packageBase ?? root
+        let onePart = ["romfs", "exefs", "sdmc"].contains(boundary.lastPathComponent.lowercased()) && boundary.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL
         let staging = to.deletingLastPathComponent().appendingPathComponent(".installing-\(to.lastPathComponent)")
         try? fm.removeItem(at: staging)
         do {
             try fm.createDirectory(at: staging, withIntermediateDirectories: true)
-            for part in entries(root) where ["romfs", "exefs"].contains(part.lowercased()) {
-                try fm.copyItem(at: root.appendingPathComponent(part), to: staging.appendingPathComponent(part.lowercased()))
+            for part in entries(root) where ["romfs", "exefs", "sdmc"].contains(part.lowercased()) {
+                if onePart && root.appendingPathComponent(part).standardizedFileURL != boundary.standardizedFileURL { continue }
+                try copyPayload(root.appendingPathComponent(part), staging.appendingPathComponent(part.lowercased()))
+            }
+            for companion in sdCompanions(root, within: boundary) {
+                let sd = staging.appendingPathComponent("sdmc")
+                try fm.createDirectory(at: sd, withIntermediateDirectories: true)
+                try copyPayload(companion, sd.appendingPathComponent(companion.lastPathComponent))
+            }
+            guard hasRomfs(staging) || hasCode(staging) || hasSdmc(staging) else {
+                throw NSError(domain: "Inkypaint.Mods", code: 1, userInfo: [NSLocalizedDescriptionKey: "No usable romfs or exefs was copied from \(root.path)."])
             }
             try fm.moveItem(at: staging, to: to)
         } catch {
@@ -149,6 +207,8 @@ final class ModsModel {
         let on: Bool
         let romfs: Bool
         let code: Bool
+        let sdmc: Bool
+        let issue: String?
         var id: String { name }
     }
 
@@ -166,7 +226,8 @@ final class ModsModel {
         let off = settings.file.value("mods_off") ?? "", dir = folder(paths)
         mods = ModFiles.list(dir).filter { !$0.hasPrefix("grid0plus-") }.map { name in
             let mod = dir.appendingPathComponent(name)
-            return Mod(name: name, on: !ModFiles.isOff(off, name), romfs: ModFiles.hasRomfs(mod), code: ModFiles.hasCode(mod))
+            let issue = ModFiles.normalizeInstalled(mod)
+            return Mod(name: name, on: !ModFiles.isOff(off, name), romfs: ModFiles.hasRomfs(mod), code: ModFiles.hasCode(mod), sdmc: ModFiles.hasSdmc(mod), issue: issue)
         }
         // the code the game was recompiled with, against the code mods played now (GRID0+'s included)
         needsRecompile = paths.isPrepared
@@ -230,7 +291,7 @@ final class ModsModel {
             for root in roots {
                 let name = ModFiles.freeName(mods, wanted: root == base ? fallback : root.lastPathComponent, fallback: fallback)
                 do {
-                    try ModFiles.install(root, to: mods.appendingPathComponent(name))
+                    try ModFiles.install(root, to: mods.appendingPathComponent(name), packageBase: base)
                 } catch {
                     return (added, "Couldn't copy the mod: \(error.localizedDescription)")
                 }

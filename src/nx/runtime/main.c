@@ -6,8 +6,10 @@
 #include "nx/runtime/main.h"
 #include "nx/runtime/maintenance.h"
 #include "nx/runtime/inkypaint_display.h"
+#include "nx/runtime/inkypaint_graphics.h"
 #include "nx/runtime/inkypaint_framerate.h"
 #include "nx/runtime/inkypaint_calltrace.h"
+#include "nx/runtime/inkypaint_ui.h"
 #include "common/cpu/recompiler/llvm/gdb_jit.h"
 #include "common/cpu/recompiler/llvm/ir.h"
 #include "common/utilities/build_info.h"
@@ -48,7 +50,7 @@
 #endif
 /* iOS loads no code that was not shipped with the app: the game's code is a pack of objects (recompile --target ios)
    that the JIT loader places in memory a debugger made executable (load_pack) */
-#if defined(__APPLE__) && TARGET_OS_IOS
+#if defined(__APPLE__) && TARGET_OS_IOS && !defined(SNX_IOS_AOT_ONLY)
 #define MODULE_PACK 1
 #include "common/cpu/recompiler/llvm/code_loader.h"
 #include "common/cpu/recompiler/llvm/objects_pack.h"
@@ -66,6 +68,9 @@ void gui_apple_stats(char* out, size_t size);
 #endif
 
 char g_datadir[1024], g_exename[256], g_exedir[1024];
+#ifdef SNX_IOS_AOT_ONLY
+static char g_ios_bundle_code[2048];
+#endif
 u64 g_addon;
 char g_addondir[1024], g_gamename[256];
 char g_confdir[1024], g_statedir[1024], g_cachedir[1024];
@@ -221,6 +226,9 @@ static const SnxModule* load_module(const char* path) {
     const SnxArmModule* arm;
     const SnxModule* m;
     if (snx_module_static) return snx_module_static();
+#ifdef SNX_IOS_AOT_ONLY
+    path = g_ios_bundle_code;
+#endif
     if (!snx_is_file(path))
         fatal("Cannot find the recompiled code: %s. A copy of the runtime runs the game it is named after, with "
               "that code beside it, or --game=PATH names the game (--game=recompiled/Game)",
@@ -830,6 +838,14 @@ int snx_main(int argc, char** argv) {
     }
     game = game_option(argc, argv);
     refuse_dumps(argc, argv, game);
+#ifdef SNX_IOS_AOT_ONLY
+    /* Keep the signed bundle path separate from Documents' --game data path. */
+    snprintf(g_ios_bundle_code, sizeof g_ios_bundle_code, "%s", program_path(argv[0]));
+    char* bundle_end = strrchr(g_ios_bundle_code, '/');
+    if (!bundle_end) fatal("The iOS executable has no bundle path");
+    snprintf(bundle_end, sizeof g_ios_bundle_code - (size_t)(bundle_end - g_ios_bundle_code),
+             "/Frameworks/InkypaintGame.framework/InkypaintGame");
+#endif
     name_game(game ? game : program_path(argv[0]));
     snprintf(module, sizeof module, "%s%s%s", g_exedir, g_exename, MODULE_SUFFIX);
     if (argc == 1 && !snx_module_static && snx_menu && snx_launcher_name(g_exename) && !snx_is_file(module)) {
@@ -924,7 +940,9 @@ int snx_main(int argc, char** argv) {
        game's blocks are arm.c's, and its hints are A32 block keys the JIT must not warm-compile */
     if (!g_arm_mod) jit_init();
     inkypaint_display_init();
+    inkypaint_graphics_init();
     inkypaint_framerate_init();
+    inkypaint_ui_init();
     inkypaint_calltrace_init(); /* last: it wraps every slot, the hooks above too */
     read_npdm();
     svc_core_init();

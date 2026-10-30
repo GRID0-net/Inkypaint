@@ -14,6 +14,7 @@ typedef struct {
     float acceleration[3];
     float angular_velocity[3];
     int valid;
+    int exact; /* readings with no noise or resting bias (the mouse's, kbm.c): used as they are */
 } PadMotion;
 
 /* the physical controller behind a player */
@@ -52,11 +53,26 @@ typedef struct {
 typedef struct {
     float amp_low, freq_low, amp_high, freq_high;
 } HidVibration;
+/* the console's own mouse and keyboard (nn::hid::MouseState, KeyboardState), which a game may read beside its
+   controllers: position in the 1280x720 screen, movement and wheel since the last sample, buttons (left, right,
+   middle, forward, back from bit 0); modifiers (nn::hid::KeyboardModifier) and the keys held by USB usage ID, which
+   SDL's scancodes are. valid 0: not connected */
+typedef struct {
+    i32 x, y, dx, dy, wheel_x, wheel_y;
+    u32 buttons;
+    int valid;
+} MouseInput;
+typedef struct {
+    u64 modifiers, keys[4];
+    int valid;
+} KeyboardInput;
 typedef struct {
     /* The frontend publishes these and hid samples them, both under input_lock */
     PadState pad1;          /* player 1 */
     PadState pad_extra[7];  /* players 2 to 8, in Npad id order */
     TouchState touch;
+    MouseInput mouse;
+    KeyboardInput keyboard;
     PMutex input_lock;
     /* hid's own, under lock */
     PMutex lock;

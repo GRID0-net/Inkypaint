@@ -8,7 +8,7 @@
 #include <string.h>
 
 /* whether optimal-tiling images of a format have these features, asked of the device once per format */
-static int has_features(VkFormat f, VkFormatFeatureFlags need) {
+int vk_format_has(VkFormat f, VkFormatFeatureFlags need) {
     static struct {
         VkFormat f;
         VkFormatFeatureFlags have;
@@ -113,7 +113,7 @@ VkFmt vk_rt_format(u32 f) {
     VkFmt r = rt_format(f);
     if (!r.bpp) {
         if (first_time(said, f)) WARN("vulkan: unsupported render target format %x, drawn as RGBA8\n", f);
-    } else if (!has_features(r.vk, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
+    } else if (!vk_format_has(r.vk, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
         /* some are optional in Vulkan (the snorm ones, 5551) */
         if (first_time(said, f))
             WARN("vulkan: the GPU can't render to format %d (target format %x), drawn as RGBA8\n", (int)r.vk, f);
@@ -138,7 +138,7 @@ VkFmt vk_zt_format(u32 f) {
         case 0x17: /* S8: only the stencil is used */
         case 0x18:
             /* D24S8 isn't supported everywhere (AMD), D32F S8 holds the same values */
-            return has_features(VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return vk_format_has(VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
                        ? D(VK_FORMAT_D24_UNORM_S8_UINT, 4, 1)
                        : D(VK_FORMAT_D32_SFLOAT_S8_UINT, 8, 1);
         case 0x19: return D(VK_FORMAT_D32_SFLOAT_S8_UINT, 8, 1);

@@ -215,7 +215,12 @@ VkDescriptorSet vk_desc_alloc(VkDescriptorSetLayout layout);
 VkDescriptorPool vk_desc_pool_new(void); /* a pool for 1024 sets of the stage layouts */
 u32 vk_frame_slot(void);                 /* the frame slot being recorded */
 /* a descriptor pool's sizes (VK_POOL_TYPES entries) for `sets` sets of the stage layouts (gpu/vk/pipeline.c) */
-#define VK_POOL_TYPES 5 /* descriptor types in a set: uniform, storage buffers, textures, images, texel buffers */
+#define VK_POOL_TYPES 6 /* descriptor types in a set: uniform, storage buffers, textures, images, texel buffers */
+VkDescriptorSetLayout vk_graphics_dslayout(u32 arrays, int stage, int textures);
+VkPipelineLayout vk_compute_playout(void);
+#define VK_DYNAMIC_CBUFS 4
+u32 vk_dynamic_cbuf_count(void);
+int vk_dynamic_cbuf_index(u32 binding); /* offset slot in ascending binding order, or -1 */
 void vk_pool_sizes(VkDescriptorPoolSize* sz, u32 sets);
 extern u32 g_vk_buffer_image_slots; /* storage texel buffer bindings in the compute set, from SNX_VKB_IMGBUF */
 /* the staging alignment that suits every use: uniform, storage, vertex and index buffers */
@@ -379,6 +384,7 @@ enum {
     VKC_BC6H_SF,
     VKC_BC7
 };
+int vk_format_has(VkFormat format, VkFormatFeatureFlags need);
 VkFmt vk_rt_format(u32 fmt);
 VkFmt vk_zt_format(u32 fmt);
 VkFmt vk_tic_format(u32 w0, int srgb); /* bpp 0: not supported */
@@ -400,6 +406,11 @@ typedef struct {
     u64 key; /* view type | swizzle << 4 | format << 20 | stencil aspect << 60 (vk_tex_view) */
     VkImageView v;
 } SurfView;
+/* Texture-owned target candidates; source pointers are used only after their spatial revision is checked. */
+typedef struct {
+    struct Surf* surface;
+    u32 source_generation, texture_generation;
+} VkTexTarget;
 typedef struct Surf {
     u64 gva;
     u32 w, h, layers, levels;
@@ -454,6 +465,10 @@ typedef struct Surf {
     SurfView sv[6];
     int nsv;
     u64 size, hash, shash;
+    VkTexTarget* take_targets;
+    u64 take_generation, take_content;
+    u32 take_upload;
+    int take_count, take_valid, take_ready;
     int upload_valid; /* textures: every subresource was uploaded (a failed upload is retried) */
     u32 checked, next_check, stable, tfull;
     u32 wseen;    /* write-tracking clock when it last matched memory */
@@ -532,7 +547,9 @@ void vk_surf_flush_land(Surf* s, const u8* p, const u8* original, u64 wgen);
 void vk_tex_note_writeback(Surf* s);
 /* counts of the GPU thread's hot paths, logged with the renderer's other counts every 600 presents */
 typedef struct {
-    u64 take, take_walked, take_found;       /* tex_take_drawn: calls, drawn-list entries walked, targets in range */
+    u64 descriptor_buffers, descriptor_images; /* descriptors actually written on cache misses */
+    u64 cb_kept, cb_shared, cb_fetch; /* constant-buffer staging reuse and slow-path lookups */
+    u64 take, take_walked, take_found, take_cached, take_static;       /* tex_take_drawn: calls, drawn-list entries walked, targets in range */
     u64 mh_full, mh_full_bytes, mh_sampled, mh_kept; /* render-target memory: hashed whole, sampled, known this epoch */
     u64 top_scan, top_scan_bytes, top_kept;  /* index ranges scanned for their highest index, answered without */
     u64 memo_hit, memo_miss;                 /* tex_resolve's memo */
@@ -541,6 +558,10 @@ extern VkHot g_vk_hot;
 void vk_rt_drawn(Surf* s);      /* a render target was drawn to (gpu/vk/render.c) */
 void vk_rt_drawn_full(Surf* s); /* a full clear or blit replaced every pixel */
 int vk_rt_drawn_fresh(Surf* s); /* no guest-memory write has replaced the target since its last draw */
+u64 vk_rt_drawn_generation(void);
+u64 vk_rt_texture_generation(const Surf* texture);
+u64 vk_rt_texture_content(const Surf* texture);
+int vk_rt_drawn_texture(const Surf* texture, Surf** out, int max);
 int vk_rt_drawn_in(u64 lo, u64 hi, Surf** out, int max); /* count drawn in [lo, hi), write up to max */
 void vk_rt_reload(u64 gva);
 /* textures share the surface table. g_vk_surf_epoch changes whenever a surface enters it, leaves it or moves (a
@@ -903,6 +924,8 @@ extern int g_vk_ftz;
 /* ftz_probe.c: 1 when the device flushes FP32 subnormals in FADD, FMUL and FFMA as the console's FTZ does, in a module
    that declares no denormal mode (it runs a compute shader and waits for it: at the renderer's start only) */
 int vk_ftz_native(void);
+/* Verify the advertised DenormFlushToZero mode before using it. Requires g_vk_flush_denorm. */
+int vk_ftz_mode(void);
 extern VkShaderStageFlags g_vk_subgroup_stages;
 /* by set, shader_vk_set(stage): [0] without the indexed texture arrays, [1] with them. A set holding 512 array
    descriptors cost the driver twice the time to bind (one game's 6,700 draws a frame), so only an indexed shader's has

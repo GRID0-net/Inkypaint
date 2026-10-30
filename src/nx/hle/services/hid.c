@@ -84,7 +84,14 @@ static void hid_sources(HidSource src[HID_ENTRIES]) {
             src[p].p = p;
         }
     }
-    if (!g_settings.tv_mode) src[8].kind = SRC_HANDHELD;
+    if (g_settings.tv_mode) return;
+    src[8].kind = SRC_HANDHELD;
+    /* handheld, player 1 is the console's own controller: the Handheld Npad alone, as on the console, when the game
+       takes one. Shown as No1 too, it pressed two Npads at once (the game disconnected all four at each press) and
+       its sensor was sampled for both, twice a sample, integrating its turn twice */
+    if (src[0].kind == SRC_PAD && ((g_hle.hid.supported_ids >> 8) & 1) &&
+        (g_hle.hid.supported_styles & STYLE_HANDHELD))
+        src[0].kind = SRC_NONE;
 }
 /* the one style an Npad has: its controller's when the game supports it, else the nearest the game does */
 static u32 hid_style_of(int e, const HidSource* s) {
@@ -336,24 +343,60 @@ static int hid_device(const HidSource* s, int dev, int* p, int* sensor) {
     default: return 0;
     }
 }
+/* hid_trace: player 1's motion samples from a change of its buttons or sticks on, as the game reads them (delta time,
+   angular velocity in revolutions a second, angle in revolutions, the direction's third row), for the jitter a press
+   makes in the aim */
+static void hid_trace_sample(int p, int sensor, const u8* state) {
+    static u64 last_buttons;
+    static i32 last_sticks[4];
+    static int left;
+    const PadState* pad = &g_hle.hid.pad[p];
+    float f[24];
+    if (p != 0 || sensor != 0) return;
+    if (pad->buttons != last_buttons || pad->lx != last_sticks[0] || pad->ly != last_sticks[1] ||
+        pad->rx != last_sticks[2] || pad->ry != last_sticks[3]) {
+        LOG("hid: player 1 buttons %llx sticks %d %d %d %d\n", (unsigned long long)pad->buttons, pad->lx, pad->ly,
+            pad->rx, pad->ry);
+        last_buttons = pad->buttons;
+        last_sticks[0] = pad->lx, last_sticks[1] = pad->ly, last_sticks[2] = pad->rx, last_sticks[3] = pad->ry;
+        left = 12;
+    }
+    if (left <= 0) return;
+    left--;
+    memcpy(f, state + HO_HidSixAxisSensorState_acceleration, sizeof f);
+    for (int i = 0; i < 24; i++) {
+        u32 bits;
+        memcpy(&bits, &f[i], 4);
+        bits = snx_ld_le32((const u8*)&bits);
+        memcpy(&f[i], &bits, 4);
+    }
+    /* acceleration 0-2, angular velocity 3-5, angle 6-8, direction 9-17 */
+    LOG("hid:   sample %llu dt %.2f ms acc %.3f %.3f %.3f gyro %.4f %.4f %.4f angle %.4f %.4f %.4f dir3 %.3f %.3f %.3f "
+        "at rest %d\n",
+        (unsigned long long)g_hle.hid.samp, (double)snx_ld_le64(state) / 1e6, f[0], f[1], f[2], f[3], f[4], f[5], f[6],
+        f[7], f[8], f[15], f[16], f[17], hid_motion_at_rest(&pad->motion[0]));
+}
 static void hid_six_axis(int e, u32 lifo, const HidSource* s, int dev, u64 dt) {
     u8 state[HS_HidSixAxisSensorState];
     int p, sensor;
     if (!hid_device(s, dev, &p, &sensor)) return;
     hid_motion_sample(&g_hle.hid.motion[p][sensor], &g_hle.hid.pad[p].motion[sensor], dt, g_hle.hid.samp, state);
     hid_lifo_push(hid_npad(e) + lifo, HS_HidSixAxisSensorStateAtomicStorage, state, sizeof state);
+    if (g_settings.hid_trace) hid_trace_sample(p, sensor, state);
 }
 
 /* ============================================================ the update */
 /* the frontend's players, taken at 60 Hz: a replaced controller ends the splits and merges it was in, and starts
    its sensors over */
-static void hid_take_input(TouchState* touch) {
+static void hid_take_input(TouchState* touch, MouseInput* mouse, KeyboardInput* keyboard) {
     PadState now[HID_PADS];
     int p, q;
     pm_lock(&g_hle.hid.input_lock);
     now[0] = g_hle.hid.pad1;
     memcpy(now + 1, g_hle.hid.pad_extra, sizeof g_hle.hid.pad_extra);
     *touch = g_hle.hid.touch;
+    *mouse = g_hle.hid.mouse;
+    *keyboard = g_hle.hid.keyboard;
     pm_unlock(&g_hle.hid.input_lock);
     for (p = 0; p < HID_PADS; p++) {
         if (now[p].source_id != g_hle.hid.pad[p].source_id || now[p].kind != g_hle.hid.pad[p].kind ||
@@ -367,18 +410,41 @@ static void hid_take_input(TouchState* touch) {
     }
 }
 
+/* nn::hid::MouseState after its sampling number (in state already): x, y, delta x and y, wheel delta x and y,
+   buttons, attributes (IsConnected, bit 1; Transferable, bit 0, stays clear) */
+static const u8* hid_mouse_state(const MouseInput* m, u8* state) {
+    if (!m->valid) return state;
+    snx_st_le32(state + 0x08, (u32)m->x);
+    snx_st_le32(state + 0x0c, (u32)m->y);
+    snx_st_le32(state + 0x10, (u32)m->dx);
+    snx_st_le32(state + 0x14, (u32)m->dy);
+    snx_st_le32(state + 0x18, (u32)m->wheel_x);
+    snx_st_le32(state + 0x1c, (u32)m->wheel_y);
+    snx_st_le32(state + 0x20, m->buttons);
+    snx_st_le32(state + 0x24, 2);
+    return state;
+}
+/* nn::hid::KeyboardState after its sampling number: modifiers (nn::hid::KeyboardModifier), 256 key bits */
+static const u8* hid_keyboard_state(const KeyboardInput* k, u8* state) {
+    if (!k->valid) return state;
+    snx_st_le64(state + 0x08, k->modifiers);
+    for (int i = 0; i < 4; i++) snx_st_le64(state + 0x10 + 8 * i, k->keys[i]);
+    return state;
+}
 void hid_update(void) {
     static const u32 lifos[5] = {HO_HidNpadInternalState_full_key_lifo, HO_HidNpadInternalState_handheld_lifo,
                                  HO_HidNpadInternalState_joy_dual_lifo, HO_HidNpadInternalState_joy_left_lifo,
                                  HO_HidNpadInternalState_joy_right_lifo};
     HidSource src[HID_ENTRIES];
     TouchState touch;
+    MouseInput mouse;
+    KeyboardInput keyboard;
     u8 state[HS_HidNpadCommonState], none[HS_HidNpadCommonState], other[HS_HidTouchScreenState];
     u8* shm;
     u64 now = plat_ns(), dt;
     int e, i;
     pm_lock(&g_hle.hid.lock);
-    hid_take_input(&touch);
+    hid_take_input(&touch, &mouse, &keyboard);
     hid_layout();
     hid_sources(src);
     g_hle.hid.samp++;
@@ -427,10 +493,12 @@ void hid_update(void) {
     memset(other, 0, sizeof other);
     snx_st_le64(other, g_hle.hid.samp);
     hid_lifo_push(shm + HO_HidSharedMemory_debug_pad, 8 + HS_HidDebugPadState, other, HS_HidDebugPadState);
-    hid_lifo_push(shm + HO_HidSharedMemory_mouse + HO_HidMouseSharedMemoryFormat_lifo, 8 + HS_HidMouseState, other,
-                  HS_HidMouseState);
+    hid_lifo_push(shm + HO_HidSharedMemory_mouse + HO_HidMouseSharedMemoryFormat_lifo, 8 + HS_HidMouseState,
+                  hid_mouse_state(&mouse, other), HS_HidMouseState);
+    memset(other, 0, sizeof other);
+    snx_st_le64(other, g_hle.hid.samp);
     hid_lifo_push(shm + HO_HidSharedMemory_keyboard + HO_HidKeyboardSharedMemoryFormat_lifo, 8 + HS_HidKeyboardState,
-                  other, HS_HidKeyboardState);
+                  hid_keyboard_state(&keyboard, other), HS_HidKeyboardState);
     pm_unlock(&g_hle.hid.lock);
 }
 
@@ -794,7 +862,38 @@ static int nn_hid_IHidServer_GetNpadCommunicationMode(SvcObj* self, nn_hid_NpadC
 }
 
 /* ============================================================ init */
-static SvcObj* new_hid(void) { return nn_hid_IHidServer_new(); }
+/* hid_trace: the game's calls to hid as they change. A command logged again only when its arguments or its answer
+   differ from the last time, with how many times it came the same in between */
+static int hid_traced_dispatch(SvcObj* self, IpcCtx* c) {
+    static struct {
+        u8 seen, in[32], out[16];
+        u32 same;
+    } last[1024];
+    u8 in[32] = {0}, out[16] = {0};
+    int rc = nn_hid_IHidServer_dispatch(self, c);
+    if (!g_settings.hid_trace || c->cmd >= 1024) return rc;
+    memcpy(in, c->raw, c->raw_size < sizeof in ? c->raw_size : sizeof in);
+    memcpy(out, c->out, c->out_size < sizeof out ? c->out_size : sizeof out);
+    if (last[c->cmd].seen && !memcmp(in, last[c->cmd].in, sizeof in) && !memcmp(out, last[c->cmd].out, sizeof out)) {
+        last[c->cmd].same++;
+        return rc;
+    }
+    {
+        char hex_in[3 * sizeof in + 1] = "", hex_out[3 * sizeof out + 1] = "";
+        u32 n_in = c->raw_size < sizeof in ? c->raw_size : (u32)sizeof in;
+        u32 n_out = c->out_size < sizeof out ? c->out_size : (u32)sizeof out;
+        for (u32 i = 0; i < n_in; i++) snprintf(hex_in + 3 * i, 4, "%02x ", in[i]);
+        for (u32 i = 0; i < n_out; i++) snprintf(hex_out + 3 * i, 4, "%02x ", out[i]);
+        LOG("hid: IHidServer [%u] in %s-> rc %x out %s(the same %u times before)\n", c->cmd, hex_in, rc, hex_out,
+            last[c->cmd].same);
+    }
+    last[c->cmd].seen = 1;
+    last[c->cmd].same = 0;
+    memcpy(last[c->cmd].in, in, sizeof in);
+    memcpy(last[c->cmd].out, out, sizeof out);
+    return rc;
+}
+static SvcObj* new_hid(void) { return svcobj_new("nn::hid::IHidServer", hid_traced_dispatch); }
 static SvcObj* new_hid_sys(void) { return nn_hid_IHidSystemServer_new(); }
 static KShmem* hid_shm(u64 size, const char* name) {
     KShmem* s = kshmem_new(size, name);

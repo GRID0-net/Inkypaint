@@ -110,7 +110,7 @@ struct ModsView: View {
                 }
                 Text(model.mods.busy ? "Adding the mod…"
                      : "A folder or an archive (.zip, .7z, .rar), or drop one here. inkypaint finds its romfs and exefs folders "
-                     + "inside, including the atmosphere/contents/0100C2500FC20000 layout. Mods load in name order: where two "
+                     + "inside, including atmosphere/contents/0100C2500FC20000. Add the whole SD bundle to keep companion folders such as flexlion3. Mods load in name order: where two "
                      + "change the same file, the later one wins.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -163,6 +163,8 @@ struct ModsView: View {
     }
 
     private func kind(_ mod: ModsModel.Mod) -> String {
+        if let issue = mod.issue { return issue }
+        if mod.sdmc { return mod.code ? "Code and SD-card data: the code takes a recompile" : "SD-card data: no recompile needed" }
         if mod.code && mod.romfs { return "Files and code: the code takes a recompile" }
         if mod.code { return "Code: takes a recompile" }
         if mod.romfs { return "Files: no recompile needed" }

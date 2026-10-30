@@ -261,6 +261,27 @@ int main(void) {
     CHECK(gamepad_button(SDL_GetJoystickID(xbox), SDL_GAMEPAD_BUTTON_SOUTH) == A);
     CHECK(gamepad_ini("gamepad_swap_ab", "0") && !gamepad_ini("gamepad", "1") && !gamepad_ini("gamepad_buttons", "1"));
 
+    /* Menu-only layout, independent of the permanent AB swap. Held confirm is quarantined on exit. */
+    CHECK(gamepad_ini("gamepad_menu_layout", "1"));
+    gamepad_set_menu(1);
+    CHECK(with(xbox, SDL_GAMEPAD_BUTTON_SOUTH) == A);
+    CHECK(with(xbox, SDL_GAMEPAD_BUTTON_EAST) == B);
+    CHECK(with(xbox, SDL_GAMEPAD_BUTTON_WEST) == X);
+    CHECK(with(xbox, SDL_GAMEPAD_BUTTON_NORTH) == Y);
+    CHECK(gamepad_ini("gamepad_swap_ab", "1"));
+    CHECK(with(xbox, SDL_GAMEPAD_BUTTON_SOUTH) == A);
+    CHECK(gamepad_ini("gamepad_swap_ab", "0"));
+    SDL_SetJoystickVirtualButton(xbox, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    CHECK(buttons() == A && gamepad_active());
+    gamepad_set_menu(0);
+    CHECK(buttons() == 0);
+    CHECK(gamepad_button(SDL_GetJoystickID(xbox), SDL_GAMEPAD_BUTTON_SOUTH) == 0);
+    SDL_SetJoystickVirtualButton(xbox, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    CHECK(buttons() == 0);
+    CHECK(with(xbox, SDL_GAMEPAD_BUTTON_SOUTH) == B);
+    CHECK(!gamepad_active());
+    CHECK(gamepad_ini("gamepad_menu_layout", "0"));
+
     /* gamepad_map: the player's map, each control what it names, the others where the console's are (a PlayStation
        pad's too), a trigger as any button; held controls are told apart from what they send; A and B swapped over it;
        a map it cannot read leaves the one before; an empty one is none */

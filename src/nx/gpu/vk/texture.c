@@ -524,9 +524,7 @@ static Surf* tex_create(u64 gva, u32 w, u32 h, u32 layers, u32 d3, u32 levels, V
                             .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
-    VkFormatProperties format_props;
-    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f.vk, &format_props);
-    if (format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) {
+    if (vk_format_has(f.vk, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
         ii.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
         t->storage_capable = 1;
     }
@@ -1041,14 +1039,16 @@ VkSampler vk_sampler(const u32* tsc, int raise, int integer) {
     i32 bias = (i32)((tsc[1] >> 12) & 0x1FFF);
     if (bias & 0x1000) bias |= ~0x1FFF;
     float lb = (float)bias / 256.f, lbmax = g_vk.props.limits.maxSamplerLodBias;
+    if (raise && (tsc[1] & 3) == 2 && ((tsc[1] >> 4) & 3) == 2 && ((tsc[1] >> 6) & 3) >= 2 &&
+        !((tsc[0] >> 9) & 1)) lb += g_settings.texture_detail_bias;
     if (lb > lbmax) lb = lbmax;
     if (lb < -lbmax) lb = -lbmax;
     static const float aniso_lut[8] = {1, 2, 4, 6, 8, 10, 12, 16}; /* Ryujinx's SamplerDescriptor */
     u32 aniso = (tsc[0] >> 20) & 7;
     float af = aniso_lut[aniso];
-    /* anisotropy=N raises a mipmapped 2D texture's linear filtering (raise), a 3D scene's surfaces, to N. Nearest
-       filtering (2D art, the HUD), samplers without a mip filter and depth compares (shadow maps) keep the game's */
-    if (raise && (float)g_vk_anisotropy > af && min == 2 && mag == 2 && mip >= 2 && !((tsc[0] >> 9) & 1))
+    /* anisotropy=N overrides filtered, mipmapped 3D surfaces, including 1 to disable it. Nearest filtering
+       (2D art, the HUD), samplers without a mip filter and depth compares keep the game's. */
+    if (raise && g_vk_anisotropy > 0 && min == 2 && mag == 2 && mip >= 2 && !((tsc[0] >> 9) & 1))
         af = (float)g_vk_anisotropy;
     if ((tsc[1] >> 10) & 3)
         LOG_LIMIT(1, "vulkan: min/max sampler reduction isn't supported (filtered as an average)\n");
@@ -1126,7 +1126,10 @@ void vk_tex_frame(void) {
        only under the budget's pressure (vk_mem_trim), and a target holding a draw a texture would take stays until
        then. The recency lists hand out the oldest first, so this costs what goes. The lossy pass looks every 600
        presents: it passes over the targets it keeps, and asking whether one holds such a draw can hash its memory */
-    u32 before = vk_present_before(20000000000ull, 120);
+    /* Reconstructible data from a previous scene should not occupy unified RAM
+       for twenty seconds while the next match allocates its working set. GPU-only
+       targets retain their existing, much longer lifetime below. */
+    u32 before = vk_present_before(5000000000ull, 120);
     vk_surf_reclaim(VK_LRU_TEX, before, ~0ull, VK_RECLAIM_LOSSLESS);
     vk_surf_reclaim(VK_LRU_RT, before, ~0ull, VK_RECLAIM_LOSSLESS);
     if (g_vk_present % 600 == 0) {
@@ -1152,10 +1155,7 @@ static void mark_copied(Surf* s, Surf* t) {
 }
 /* a scaled target (resolution= other than 1) reaches a texture by a blit, which f's tiling has to take both ways */
 static int can_blit(VkFormat f) {
-    VkFormatProperties p = {0};
-    VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
-    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
-    return (p.optimalTilingFeatures & need) == need;
+    return vk_format_has(f, VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT);
 }
 /* the command buffer with s ready to be read from and t written to, by copies or blits */
 static VkCommandBuffer copy_begin(Surf* s, Surf* t) {
@@ -1257,6 +1257,37 @@ static int copy_blocks(Surf* s, Surf* t, u32 level, u32 layer, u32 count, u32 w,
     return ok;
 }
 
+/* Candidate storage belongs to its texture, so unrelated allocations and evictions cannot
+   flush it, and more than 256 active textures cannot thrash a shared four-way table. */
+#define TAKE_TARGETS 128
+#define TAKE_CACHE_MAX 512
+static int take_shape(const Surf* s, const Surf* t) {
+    if (s->f.depth != t->f.depth || s->f.stencil != t->f.stencil || s->f.bpp != t->f.bpp ||
+        (t->f.depth && s->f.vk != t->f.vk)) return 0;
+    if (t->type == VK_IMAGE_VIEW_TYPE_3D) {
+        if (t->f.depth || t->f.bw > 1) return 0;
+        /* Array layers can fill a whole volume, or 2D targets can fill individual GOB slices. For slices the
+           existing copy path permits any wider source row, so don't apply the 2D GOB-width restriction. */
+        for (u32 l = 0; l < t->levels; l++) {
+            u32 w = t->w >> l, h = t->h >> l;
+            if (!w) w = 1;
+            if (!h) h = 1;
+            if (s->w >= w && s->h == h) return 1;
+        }
+        return 0;
+    }
+    for (u32 l = 0; l < t->levels; l++) {
+        u32 w = t->w >> l, h = t->h >> l;
+        if (!w) w = 1;
+        if (!h) h = 1;
+        w = (w + t->f.bw - 1) / t->f.bw;
+        h = (h + t->f.bh - 1) / t->f.bh;
+        int padded = t->bl && s->bl && (t->f.bw > 1 || s->f.vk == t->f.vk) && s->w > w &&
+                     ((u64)s->w * s->f.bpp + 63) / 64 == ((u64)w * t->f.bpp + 63) / 64;
+        if (s->h == h && (s->w == w || padded)) return 1;
+    }
+    return 0;
+}
 /* a texture whose layers, levels or 3D slices were drawn as render targets of their own is copied from those targets
    on the GPU: they are never written back to its memory. Only a target matching one subresource (or, layered, the
    layers from one), whose backing memory has not been overwritten since its draw. Generated textures can be first
@@ -1268,28 +1299,59 @@ static void tex_take_drawn(Surf* t) {
     int blocks = t->f.bw > 1;
     if ((t->f.conv && !t->f.depth && !blocks) || (blocks && t->f.conv == VKC_ASTC)) return;
     g_vk_hot.take++;
-    Surf* small[32];
+    Surf* small[TAKE_TARGETS];
     Surf** d = small;
     u64 stride = t->layer_size;
-    u64 hi = t->gva + t->size;
-    int n = vk_rt_drawn_in(t->gva, hi, d, 32);
-    if (n > 32) {
-        d = malloc((size_t)n * sizeof *d);
-        if (d)
-            n = vk_rt_drawn_in(t->gva, hi, d, n);
-        else {
-            d = small;
-            n = 32;
+    u64 generation = vk_rt_texture_generation(t), content = vk_rt_texture_content(t);
+    VkTexTarget* tracking = NULL;
+    int n = 0, complete = 1;
+    if (t->take_valid && t->take_generation == generation) {
+        if (t->take_ready && t->take_upload == t->wgen && t->take_content == content) {
+            g_vk_hot.take_static++;
+            return;
+        }
+        n = t->take_count;
+        tracking = t->take_targets;
+        g_vk_hot.take_cached++;
+    } else {
+        t->take_valid = t->take_ready = 0;
+        n = vk_rt_drawn_texture(t, d, TAKE_TARGETS);
+        if (n > TAKE_TARGETS) {
+            d = malloc((size_t)n * sizeof *d);
+            if (d) n = vk_rt_drawn_texture(t, d, n);
+            else { d = small; n = TAKE_TARGETS; complete = 0; }
+        }
+        int compatible = 0;
+        for (int i = 0; i < n; i++)
+            if (take_shape(d[i], t)) d[compatible++] = d[i];
+        n = compatible;
+        if (complete && n <= TAKE_CACHE_MAX) {
+            VkTexTarget* targets = n ? realloc(t->take_targets, (size_t)n * sizeof *targets) : NULL;
+            if (!n || targets) {
+                if (!n) free(t->take_targets);
+                t->take_targets = targets;
+                t->take_count = n;
+                t->take_generation = generation;
+                t->take_valid = 1;
+                tracking = targets;
+                for (int i = 0; i < n; i++) targets[i] = (VkTexTarget){.surface = d[i]};
+            }
         }
     }
-    int taken = 0;
+    /* A copy/conversion may allocate and trim the image cache. Keep every borrowed
+       source alive until all candidates have been processed, not just the first. */
+    for (int i = 0; i < n; i++) vk_surf_touch(tracking ? tracking[i].surface : d[i]);
+    int taken = 0, all_copied = 1;
     for (int i = 0; i < n; i++) {
-        Surf* s = d[i];
+        Surf* s = tracking ? tracking[i].surface : d[i];
         /* depth targets feed depth textures of the same host format, with their stencil when it has one (a depth
            pyramid of a D24S8 target: Pokemon Legends Z-A's lighting samples it with all its levels) */
         if (s->f.depth != t->f.depth || s->f.stencil != t->f.stencil || s->f.bpp != t->f.bpp ||
-            (t->f.depth && s->f.vk != t->f.vk) || copied_into(s, t))
+            (t->f.depth && s->f.vk != t->f.vk) ||
+            (tracking && tracking[i].source_generation == s->wgen && tracking[i].texture_generation == t->wgen) ||
+            copied_into(s, t))
             continue;
+        all_copied = 0;
         /* a blit converts formats where a copy keeps the bits: a scaled target only into a texture of its own format */
         int scaled = s->sw != s->w || s->sh != s->h;
         if (scaled && (blocks ? !can_blit(s->f.vk) : s->f.vk != t->f.vk || !can_blit(t->f.vk))) continue;
@@ -1337,6 +1399,10 @@ static void tex_take_drawn(Surf* t) {
                 } else
                     copy_layers(cb, s, t, 0, 0, t->depth3d, t->w, t->h, 1);
                 mark_copied(s, t);
+                if (tracking) {
+                    tracking[i].source_generation = s->wgen;
+                    tracking[i].texture_generation = t->wgen;
+                }
                 vk_render_unhoist();
                 continue;
             }
@@ -1364,6 +1430,10 @@ static void tex_take_drawn(Surf* t) {
                     if (z < ld) {
                         copy_layers(copy_begin(s, t), s, t, l, (u32)z, 1, lw, lh, 1);
                         mark_copied(s, t);
+                        if (tracking) {
+                            tracking[i].source_generation = s->wgen;
+                            tracking[i].texture_generation = t->wgen;
+                        }
                         vk_render_unhoist();
                         break;
                     }
@@ -1393,6 +1463,10 @@ static void tex_take_drawn(Surf* t) {
                 } else
                     copy_layers(copy_begin(s, t), s, t, l, layer, count, lw, lh, 0);
                 mark_copied(s, t);
+                if (tracking) {
+                    tracking[i].source_generation = s->wgen;
+                    tracking[i].texture_generation = t->wgen;
+                }
                 taken++;
                 if (!blocks) vk_render_unhoist();
                 break;
@@ -1404,6 +1478,11 @@ static void tex_take_drawn(Surf* t) {
     if (n && (t->type == VK_IMAGE_VIEW_TYPE_CUBE || t->type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY))
         LOG_LIMIT(40, "vulkan: cube texture %llx %ux%u, %u layers, %u levels: %d targets drawn over it, %d copied in now\n",
                   (unsigned long long)t->gva, t->w, t->h, t->layers, t->levels, n, taken);
+    if (t->take_valid) {
+        t->take_ready = all_copied && complete;
+        t->take_upload = t->wgen;
+        t->take_content = content;
+    }
     if (d != small) free(d);
 }
 Surf* vk_tex_from_tic(const u32* tic) {

@@ -35,6 +35,8 @@
 			</array>
 		</dict>
 	</dict>
+	<key>NSMotionUsageDescription</key>
+	<string>Use device motion to aim in inkypaint.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>

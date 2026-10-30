@@ -212,8 +212,6 @@ static const struct {
     const char *key, *now;
 } INI_DEPRECATED[] = {{"audio_device", "playback follows the system's default"},
                       {"renderer", "Vulkan is the only renderer"},
-                      {"dynamic_resolution", "went with the OpenGL renderer"},
-                      {"dynamic_resolution_min", "went with the OpenGL renderer"},
                       {"game_dynamic_resolution", "went with the OpenGL renderer"},
                       {"low_priority_shader_compiler", "went with the OpenGL renderer"},
                       {"forced_vsync", "now vsync"},

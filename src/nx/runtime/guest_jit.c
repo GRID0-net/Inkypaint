@@ -203,6 +203,12 @@ void jit_init(void) {
     } else {
         WARN("jit: the AOT module has no runtime code variants; the JIT handles the misses and writes a cache\n");
     }
+#ifdef SNX_IOS_AOT_ONLY
+    snprintf(g_jit_error, sizeof(g_jit_error), "this iOS build runs signed, ahead-of-time game code only");
+    mem_set_code_invalidate(jit_code_invalidate);
+    LOG("aot: signed game code and precompiled variants only; runtime compilation disabled\n");
+    return;
+#endif
     memset(&config, 0, sizeof(config));
     opt = g_settings.jit_optimization[0];
     if (!opt || !strchr("0123sz", opt)) opt = '0'; /* an empty or hand-edited .ini */
@@ -252,6 +258,11 @@ GuestFn jit_resolve(u64 pc) {
 }
 
 GuestFn jit_wait(u64 pc) {
+#ifdef SNX_IOS_AOT_ONLY
+    /* Hooks need the original AOT function, not their own dispatch wrapper. */
+    for (u32 i = 0; i < g_mod->nentries; i++)
+        if (g_mod->entry_addr[i] == pc) return g_mod->entry_fn[i];
+#endif
     GuestFn code = variant_resolve(pc);
     if (code) return code;
     return g_jit ? snx_jit_wait(g_jit, pc) : NULL;

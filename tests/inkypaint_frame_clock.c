@@ -20,6 +20,7 @@ static void cadence(unsigned hz) {
 int main(void) {
     cadence(60);
     cadence(90);
+    cadence(100);
     cadence(120);
     cadence(144);
     InkypaintFrameClock clock = {0};

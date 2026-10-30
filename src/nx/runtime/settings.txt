@@ -49,6 +49,7 @@ include "common/utilities/users.h"
 include <limits.h>
 
 list controls l=L r=R zl=ZL zr=ZR minus=- plus=+ capture=Capture home=Home l3=L3 r3=R3 dpad=D-pad stick_l=Left_stick stick_r=Right_stick a=A b=B x=X y=Y
+list kbm a=A b=B x=X y=Y l=L r=R zl=ZL zr=ZR plus=Plus minus=Minus l3=L3 r3=R3 up=D-pad_up down=D-pad_down left=D-pad_left right=D-pad_right ls_up=Move_forward ls_down=Move_back ls_left=Move_left ls_right=Move_right rs_up=Camera_up rs_down=Camera_down rs_left=Camera_left rs_right=Camera_right cursor=Free_the_mouse
 
 # ---- the game's .ini ----
 
@@ -174,13 +175,61 @@ setting Resolution scale
     float 0.25 4
     default 1
     startup
-    help The scale of the game's 3D rendering, 0.25 to 4: 1 = the console's, 2 = double, 0.5 = half
+    help Scene render scale, 0.25 to 4. With the engine quality hooks, the UI and GPU data textures keep their normal size
+setting Dynamic resolution
+    key dynamic_resolution
+    int 0 1
+    default 0
+    startup
+    words Off|On
+    help Adjust the engine's scene resolution using completed GPU work, keeping the UI at its normal resolution
+setting Minimum render scale
+    key dynamic_resolution_min
+    float 0.25 1
+    default 0.5
+    startup
+    help The lowest scene scale dynamic resolution may choose, capped by Resolution scale
+setting Dynamic resolution target
+    key dynamic_resolution_fps
+    int 30 120
+    default 60
+    startup
+    help The GPU frame budget for dynamic resolution. Does not change the simulation or frame-rate limit
+setting Bloom
+    key bloom
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help Keep the game's bloom, or disable it in the engine's environment settings
+setting Depth of field
+    key depth_of_field
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help Keep the game's focus blur, or disable it in the engine's environment settings
+setting Vignette
+    key vignette
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help Keep the engine's vignette, or disable its vignette pass
+setting Fog
+    key fog
+    int 0 1
+    default 1
+    startup
+    words Off|On
+    help Keep the engine's depth and height fog, or disable both
 setting Shadows
     key shadows
     int 0 1
     default 1
+    startup
     words Off|On
-    help 0 = skips shadow maps
+    help 0 = disables depth shadows and shadow post-processing in the engine
 setting Vsync
     key vsync
     label VSync
@@ -195,7 +244,19 @@ setting Anisotropic filtering
     default 0
     startup
     words Game's|#x
-    help 0 = textures filtered as the game asks, 2 to 16 = sharper surfaces seen at an angle
+    help 0 = as the game asks, 1 = off, 2 to 16 = the chosen filtering level for 3D surfaces
+setting Texture detail bias
+    key texture_lod_bias
+    float 0 3
+    default 0
+    startup
+    help Extra mip bias for filtered 3D surfaces: 0 keeps the game, 1 to 3 samples coarser textures. Does not reduce texture allocations
+setting Presentation filter
+    key presentation_filter
+    int 0 1
+    default 1
+    words Nearest|Linear
+    help How the final image is resized to the window. The engine handles upscaling its lower-resolution scene separately
 setting Vulkan Video decode
     key vulkan_video
     label Vulkan Video decode (experimental)
@@ -220,9 +281,9 @@ setting Smooth motion
     int 0 1
     default 0
     startup
-    words Off|120 Hz
+    words Off|On
     help Experimental (inkypaint, Splatoon 3 11.3.0): the game's logic stays at 60 steps a second while frames are
-    help drawn up to 120 a second, the camera interpolated between steps. Shows only with GPU time to spare
+    help drawn at the numeric FPS limit above 60 (otherwise up to 120), interpolated between steps. Requires GPU headroom
 setting Memory (GB)
     key memory_gb
     int 0 8
@@ -315,7 +376,7 @@ setting Show controls
     key controls
     int 0 1
     default 0
-    default-if __ANDROID__ 1
+    default-if SNX_TOUCH_DEVICE 1
     set vpad_on_set
     words Off|On
     help The on-screen controls: 1 = shown, 0 = hidden. The game's menu (Back, Home or F2) sets them
@@ -389,8 +450,88 @@ setting Control shown
     words Hidden|Shown
     help 1 = a control is drawn, 0 = hidden; written once it is shown or hidden
 
+# the keyboard and the mouse (platform/backend/kbm.c): player 1's controller from the keys, the mouse's buttons, and the
+# mouse turned into the controller's motion sensor, which the game aims with
+table g_kbm_ini
+setting Keyboard and mouse input
+    key keyboard_mouse_enabled
+    int 0 1
+    default 1
+    words Off|On
+    help Keyboard play, mouse aim and menu clicks. Physical controller activity takes priority while enabled.
+setting Device motion
+    key device_motion
+    int 0 1
+    default 0
+    default-if __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ 1
+    words Off|On
+    help Use the phone's accelerometer and gyroscope for player 1 when no physical controller is connected.
+    help The game's own motion controls must also be enabled.
+setting Mouse aim
+    key mouse_aim
+    int 0 1
+    default 1
+    words Off|On
+    help 1 = the mouse aims as the controller's motion sensor does (the game's motion controls on) once a click in the
+    help window takes it; Free the mouse's key, the menu or another window lets it go
+setting Mouse sensitivity
+    key mouse_sensitivity
+    int 5 1000
+    default 100
+    words #%
+    step 5
+    help How far the mouse turns the aim, in percent: 100 = 0.06 degrees of the controller's turn per count
+setting Mouse vertical sensitivity
+    key mouse_sensitivity_y
+    int 10 400
+    default 100
+    words #%
+    step 5
+    help The vertical aim's sensitivity, in percent of the horizontal one
+setting Mouse invert vertical
+    key mouse_invert_y
+    int 0 1
+    default 0
+    words Off|On
+    help 1 = moving the mouse up aims down
+setting Mouse in menus
+    key mouse_in_menus
+    int 0 1
+    default 1
+    words Off|On
+    help 1 = in the game's menus the mouse is let go and points: the menu's cursor follows it onto a button, a left
+    help click picks the button, the other mouse buttons press what they are bound to
+setting Keyboard binding
+    key key_<ID>
+    each kbm
+    text 64
+    default ""
+    once
+    set kbm_bindings_set
+    label Key
+    help The keys and mouse buttons that press a control, as SDL names them, a comma between two: W, Left Shift,
+    help Space, Mouse Left, Mouse Right, Mouse Middle, Mouse X1, Mouse X2, Wheel Up, Wheel Down. Empty = the
+    help default, None = no key
+setting Menu binding
+    key menu_key_<ID>
+    each kbm
+    text 64
+    default ""
+    once
+    set kbm_bindings_set
+    label Key in menus
+    help The keys and mouse buttons that press a control while one of the game's menus is up (the left mouse button
+    help clicks there), named as for key_<ID>. Empty = the default, None = no key
+
 # the controllers' (platform/backend/gamepad.c)
 table g_gamepad_ini
+setting Xbox/PlayStation layout in menus
+    key gamepad_menu_layout
+    int 0 1
+    default 0
+    words Off|On
+    help In detected game menus, swap A/B and X/Y. A visible A-button interaction guide swaps only A/B.
+    help Bottom confirms or interacts; outside these contexts gameplay keeps its map.
 setting Swap A/B
     key gamepad_swap_ab
     int 0 1
@@ -577,6 +718,27 @@ setting Answer unknown commands
     words Off|On
     help 1 = a service command the runtime doesn't know answers success (logged as [undeclared]); 0 = it answers
     help the console's UnknownCommandId, which shows the gap where the game makes the call
+setting Native keyboard and mouse
+    key native_kbm
+    int 0 1
+    default 0
+    words Off|On
+    help 1 = an experiment: the console's own mouse and keyboard devices report the PC's (where the pointer is over
+    help the game's picture, its buttons, wheel and movement; the keys held), for a game that reads them itself
+setting UI census
+    key ui_census
+    int 0 1
+    default 0
+    words Off|On
+    help 1 = F9 writes every menu the game draws in that frame (its panes' names, places and text) to uicensus.txt
+    help in the game's folder, for mapping the game's menus
+setting HID trace
+    key hid_trace
+    int 0 1
+    default 0
+    words Off|On
+    help 1 = logs the game's calls to the controllers' service as they change (the motion sensors' settings, at rest
+    help or not), and player 1's motion samples around each change of its buttons or sticks
 setting Shader captures
     key diag
     int 0 1
@@ -927,6 +1089,7 @@ section Graphics: g_graphics_ini
 section Performance: g_performance_ini
 section On-screen controls: g_vpad_ini, g_backend_ini, g_vpad_shown_ini/Buttons    backend
 section Controllers: g_gamepad_ini, g_gamepad_map_ini/Button map, g_gamepad_players_ini/Player    backend
+section Keyboard and mouse: g_kbm_ini    backend
 section Network: g_network_ini
 section User: g_user_ini
 section Debug: g_debug_ini

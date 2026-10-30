@@ -12,6 +12,8 @@
 #include "nx/gpu/gpu.h"
 #include "nx/memory/own.h"
 #include "nx/gpu/vk/vk.h"
+#include "nx/runtime/inkypaint_graphics.h"
+#include "nx/runtime/options.h"
 #include "nx/runtime/platform/plat.h"
 #include "common/utilities/common.h"
 #include "nx/runtime/platform/backend.h"
@@ -46,6 +48,9 @@ typedef struct {
     u64 last;             /* the timeline value of the frame's last submission, 0 when it has none */
     u64 hold;             /* the next frame's submission that reads buffers in this one's rings (vk_frame_hold), or 0 */
     int recording, fresh; /* fresh: just ended up current, not yet reset for its new use */
+    VkQueryPool quality_time; /* two timestamps per submission, only with dynamic resolution */
+    u32 quality_used;
+    int quality_active;
     Ring stage;           /* uploads and draw data, written by the CPU and read by the GPU */
     Ring output;          /* GPU-written storage and draw state, near the GPU when its budget allows */
     Ring back;            /* storage results copied back by the GPU for the CPU to read (vk_stage_back) */
@@ -180,7 +185,15 @@ void vk_cmd_init(void) {
     for (int i = 0; i < VK_FRAMES; i++) {
         VK_OK(vkCreateCommandPool(g_vk.dev, &pci, NULL, &g_fr[i].pool));
         g_fr[i].fresh = 1;
+        if (inkypaint_graphics_engine_scale() &&
+            g_vk.props.limits.timestampComputeAndGraphics) {
+            VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                        .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 64};
+            VK_OK(vkCreateQueryPool(g_vk.dev, &qi, NULL, &g_fr[i].quality_time));
+        }
     }
+    if (inkypaint_graphics_engine_scale())
+        LOG("graphics: completed-frame GPU timing %s\n", g_fr[0].quality_time ? "enabled" : "unavailable on this device");
     vk_rec_init();
 }
 
@@ -291,6 +304,21 @@ static void frame_recycle(Frame* f) {
         f->last = 0;
         f->hold = 0;
     }
+    if (f->quality_time && f->quality_used && !f->quality_active && f->icb <= 32) {
+        u64 ts[64], ticks = 0;
+        /* The frame timeline already completed. No WAIT bit, polling, or extra GPU submission. */
+        if (vkGetQueryPoolResults(g_vk.dev, f->quality_time, 0, f->quality_used, sizeof ts, ts,
+                                  sizeof(u64), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            for (u32 q = 0; q + 1 < f->quality_used; q += 2) {
+                if (ts[q + 1] < ts[q]) { ticks = 0; break; } /* ignore the rare timestamp wrap */
+                ticks += ts[q + 1] - ts[q];
+            }
+            double ns = (double)ticks * g_vk.props.limits.timestampPeriod;
+            if (ns >= 100000 && ns <= 500000000) inkypaint_graphics_gpu_time((u64)ns);
+        }
+    }
+    f->quality_used = 0;
+    f->quality_active = 0;
     vk_gpuprof_frame_done((u32)(f - g_fr)); /* its timestamps, read before the slot records again */
     dead_free(f);
     g_dead_bytes -= f->dead_bytes;
@@ -345,6 +373,12 @@ VkCommandBuffer vk_cmd(void) {
         vk_rec_begin(f->cbs[f->icb]);
         f->recording = 1;
         g_cb_begun++;
+        if (f->quality_time && f->quality_used < 64) {
+            if (!f->quality_used) rec_CmdResetQueryPool(f->cbs[f->icb], f->quality_time, 0, 64);
+            rec_CmdWriteTimestamp2(f->cbs[f->icb], VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                  f->quality_time, f->quality_used++);
+            f->quality_active = 1;
+        }
     }
     return f->cbs[f->icb];
 }
@@ -479,6 +513,10 @@ static void submit(const VkSemaphoreSubmitInfo* xw, const VkSemaphoreSubmitInfo*
     VkCommandBuffer cb = vk_cmd(); /* a submit with nothing recorded still has to wait and signal */
     vk_query_flush(cb);            /* the samples-passed counts of the passes ended (query.c) */
     vk_buf_host_barrier(cb, g_gval + 1);
+    if (f->quality_active) {
+        rec_CmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, f->quality_time, f->quality_used++);
+        f->quality_active = 0;
+    }
     /* staging memory may not be host coherent: the host writes are made visible to the GPU here */
     if (f->stage.mem) vmaFlushAllocation(g_vk.vma, f->stage.mem, 0, VK_WHOLE_SIZE);
     if (f->output.mem) vmaFlushAllocation(g_vk.vma, f->output.mem, 0, VK_WHOLE_SIZE);

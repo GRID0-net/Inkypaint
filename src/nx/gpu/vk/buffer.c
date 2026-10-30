@@ -2182,7 +2182,7 @@ void vk_buf_stats(u32* count, u64* bytes) {
     *bytes = g_own.bytes;
 }
 
-/* buffers not read for twenty seconds, and in 120 presents, go */
+/* buffers not read for five seconds, and in 120 presents, go */
 void vk_buf_frame(void) {
     if (g_vk_present % 4) return;
     if (copy_stats_on() && g_vk_present % 600 == 0) {
@@ -2215,11 +2215,11 @@ void vk_buf_frame(void) {
         memset(g_wb_draw_miss, 0, sizeof g_wb_draw_miss);
     }
     /* a sixteenth of the entries every fourth present: an entry goes at most 64 presents after its time. One with a
-       buffer of its own goes after twenty seconds unused. One without holds only what its next check compares with:
+       buffer of its own goes after five seconds unused. One without holds only what its next check compares with:
        ranges read once (constants streamed through a ring, vertices at new offsets) made most of the entries, and the
        lookups of the ones in use missed the cache over them, so those go after two seconds */
     static u32 sweep;
-    u32 before = vk_present_before(20000000000ull, 120), before_copy = vk_present_before(2000000000ull, 12);
+    u32 before = vk_present_before(5000000000ull, 120), before_copy = vk_present_before(2000000000ull, 12);
     if ((!before && !before_copy) || !g_nvb) return;
     u32 chunk = (g_nvb + 15) / 16, from = (sweep++ & 15) * chunk;
     for (u32 i = from ? from : 1; i < from + chunk && i < g_nvb; i++) {

@@ -27,8 +27,13 @@ public:
     Q_INVOKABLE void set(const QString& key, const QString& value);
     Q_INVOKABLE QString label(const QString& key) const; // the label a choice shows (Play's summary)
     Q_INVOKABLE QVariantList adapters() const;           // the LAN adapter choices, listed now
+    // a key event's SDL name, as key_<control> holds it (keynames.h)
+    Q_INVOKABLE QString keyName(int key, quint32 nativeScanCode, int modifiers) const;
+    Q_INVOKABLE QString controllerValue(const QString& control) const;
+    Q_INVOKABLE void setControllerMapping(const QString& control, const QString& target);
     Q_INVOKABLE void reload();
     Q_INVOKABLE void resetAll();
+    Q_INVOKABLE void applyGraphicsPreset(const QString& name);
     /// A key the catalog doesn't show (the online settings), in section when the file doesn't have it yet
     void setRaw(const QString& key, const QString& value, const QString& section);
     QString raw(const QString& key, bool* found = nullptr) const { return file_.value(key, found); }

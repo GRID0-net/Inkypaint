@@ -62,6 +62,7 @@ typedef struct {
 } DirectCtx;
 
 int g_shader_texture_arrays;
+u32 g_shader_texture_set_base;
 int g_shader_stage_point_size;
 int g_shader_output_layer = 1;
 int g_shader_viewport_index = 3;
@@ -2704,7 +2705,10 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
     u8 inputs_used[32] = {0};
     u8 outputs_used[32] = {0};
     int indexed_store = 0;
-    int position_used = 0, layer_output_used = 0, layer_input_used = 0, point_size_used = 0;
+    /* Vertex programs can leave position unwritten (for example, instanced points
+       accumulating irradiance). Maxwell supplies (0,0,0,1); Vulkan still needs an
+       initialized Position output for those points to rasterize. */
+    int position_used = stage == ST_VS, layer_output_used = 0, layer_input_used = 0, point_size_used = 0;
     int viewport_used = 0;
     /* the stages between the vertex and fragment ones: their input arrays' length (32 for tessellation, the input
        primitive's vertices for geometry), the control program's output vertices, and what they read and write */
@@ -4229,13 +4233,13 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
             c->tex_table[i] = (u8)table;
             if (i == first_indexed[0]) {
                 c->texture_array =
-                    spv_emit_sampler_image_array(&c->emit, scalar, c->u32_type, shader_vk_set(stage), SNX_VKB_TEXARRAY,
+                    spv_emit_sampler_image_array(&c->emit, scalar, c->u32_type, shader_vk_texture_set(stage), SNX_VKB_TEXARRAY,
                                                  textures[i].type == 0 ? 1 : textures[i].type, textures[i].array, 0,
                                                  SNX_TEX_ARRAY, &c->sampled_type[i]);
                 interfaces[count++] = c->texture_array;
                 if (textures[i].shadow) {
                     c->depth_array =
-                        spv_emit_sampler_image_array(&c->emit, c->f32_type, c->u32_type, shader_vk_set(stage),
+                        spv_emit_sampler_image_array(&c->emit, c->f32_type, c->u32_type, shader_vk_texture_set(stage),
                                                      SNX_VKB_TEXDEPTH, textures[i].type == 0 ? 1 : textures[i].type,
                                                      textures[i].array, 1, SNX_TEX_ARRAY, &c->depth_type);
                     interfaces[count++] = c->depth_array;
@@ -4245,7 +4249,7 @@ static u32* to_spirv(const u8* code, const u64* insn, u32 max_bytes, int stage, 
             c->sampler[i] = c->texture_array;
             continue;
         }
-        c->sampler[i] = spv_emit_sampler_image(&c->emit, scalar, shader_vk_set(stage), SNX_VKB_TEX + (u32)i,
+        c->sampler[i] = spv_emit_sampler_image(&c->emit, scalar, shader_vk_texture_set(stage), SNX_VKB_TEX + (u32)i,
                                                textures[i].type == 0 ? 1 : textures[i].type, textures[i].array,
                                                textures[i].shadow && dc_color_func(si, i) < 0,
                                                !!(textures[i].flags & 2), &c->sampled_type[i]);

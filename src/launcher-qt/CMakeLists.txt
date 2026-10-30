@@ -15,7 +15,7 @@ qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(inkypaint WIN32
     main.cpp launchersettings.cpp launchersettings.h game.cpp game.h inifile.cpp inifile.h gamesettings.cpp gamesettings.h preparer.cpp preparer.h
-    grid0.cpp grid0.h grid0patches.cpp grid0patches.h onlinemodel.cpp onlinemodel.h modfiles.cpp modfiles.h modsmodel.cpp modsmodel.h
+    grid0.cpp grid0.h grid0patches.cpp grid0patches.h onlinemodel.cpp onlinemodel.h keynames.cpp keynames.h modfiles.cpp modfiles.h modsmodel.cpp modsmodel.h
     appmodel.cpp appmodel.h)
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(inkypaint
@@ -25,7 +25,7 @@ qt_add_qml_module(inkypaint
         qml/Main.qml qml/Theme.qml qml/PageScroll.qml qml/Hero.qml qml/PlayPage.qml qml/FilesPage.qml
         qml/SettingsPage.qml qml/OnlinePage.qml qml/SplatMark.qml qml/GlassCard.qml qml/InkButton.qml
         qml/InkText.qml qml/InkSwitch.qml qml/InkField.qml qml/InkChoice.qml qml/StepBadge.qml qml/Banner.qml
-        qml/Avatar.qml qml/InkBackdrop.qml qml/FileRow.qml qml/PlayerRow.qml qml/SignInCard.qml qml/ModsPage.qml)
+        qml/Avatar.qml qml/InkBackdrop.qml qml/FileRow.qml qml/PlayerRow.qml qml/SignInCard.qml qml/ModsPage.qml qml/KeyCapture.qml qml/ControllerMap.qml)
 # the splats (white masks, tinted where they are drawn) and the icon, from dist/launcher
 set(dist "${CMAKE_CURRENT_SOURCE_DIR}/../../dist/launcher")
 set_source_files_properties("${dist}/AppIcon-1024.png" PROPERTIES QT_RESOURCE_ALIAS AppIcon.png)
@@ -50,4 +50,37 @@ endif()
 if(BUILD_TESTING)
     add_executable(inkypaint-test-dialogs EXCLUDE_FROM_ALL ../../tests/launcher_qt_dialogs.cpp)
     target_link_libraries(inkypaint-test-dialogs PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-graphics EXCLUDE_FROM_ALL
+        ../../tests/launcher_graphics.cpp gamesettings.cpp gamesettings.h inifile.cpp keynames.cpp)
+    target_include_directories(inkypaint-test-graphics PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(inkypaint-test-graphics PRIVATE Qt6::Gui Qt6::Network)
+    add_test(NAME launcher_graphics_presets COMMAND inkypaint-test-graphics)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-switch EXCLUDE_FROM_ALL ../../tests/launcher_switch.cpp)
+    target_compile_definitions(inkypaint-test-switch PRIVATE INKY_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml")
+    target_link_libraries(inkypaint-test-switch PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    add_test(NAME launcher_switch_hit_area COMMAND inkypaint-test-switch)
+    set_tests_properties(launcher_switch_hit_area PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-input-pages EXCLUDE_FROM_ALL
+        ../../tests/launcher_input_pages.cpp gamesettings.cpp gamesettings.h inifile.cpp keynames.cpp)
+    target_include_directories(inkypaint-test-input-pages PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(inkypaint-test-input-pages PRIVATE INKY_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml")
+    target_link_libraries(inkypaint-test-input-pages PRIVATE Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    add_test(NAME launcher_input_pages COMMAND inkypaint-test-input-pages)
+    set_tests_properties(launcher_input_pages PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-mod-paths EXCLUDE_FROM_ALL ../../tests/launcher_mod_paths.cpp modfiles.cpp)
+    target_include_directories(inkypaint-test-mod-paths PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(inkypaint-test-mod-paths PRIVATE Qt6::Core)
+    add_test(NAME launcher_mod_paths COMMAND inkypaint-test-mod-paths)
 endif()

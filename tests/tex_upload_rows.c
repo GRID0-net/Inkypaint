@@ -248,9 +248,27 @@ int vk_rt_drawn_fresh(Surf* s) {
     (void)s;
     return 0;
 }
+u32 g_vk_surf_epoch;
+static u64 take_generation, take_content;
+static unsigned take_queries;
+static Surf* take_sources[192];
+static int take_count;
+u64 vk_rt_drawn_generation(void) { return take_generation; }
+u64 vk_rt_texture_generation(const Surf* t) { (void)t; return take_generation; }
+u64 vk_rt_texture_content(const Surf* t) { (void)t; return take_content; }
+int vk_format_has(VkFormat f, VkFormatFeatureFlags need) {
+    VkFormatProperties p;
+    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
+    return (p.optimalTilingFeatures & need) == need;
+}
 int vk_rt_drawn_in(u64 lo, u64 hi, Surf** out, int max) {
-    (void)lo, (void)hi, (void)out, (void)max;
-    return 0;
+    (void)lo, (void)hi;
+    take_queries++;
+    for (int i = 0; i < take_count && i < max; i++) out[i] = take_sources[i];
+    return take_count;
+}
+int vk_rt_drawn_texture(const Surf* t, Surf** out, int max) {
+    return vk_rt_drawn_in(t->gva, t->gva + t->size, out, max);
 }
 Surf* vk_rt_find(u64 gva) {
     (void)gva;
@@ -390,7 +408,60 @@ static void upload_and_check(Surf* t, u64 limit, u32 bands) {
     CHECK(first == nregs);
 }
 
+static void take_candidates(void) {
+    Surf texture = {.gva = 0x1000, .size = 0x10000, .w = 64, .h = 64, .levels = 4,
+                    .type = VK_IMAGE_VIEW_TYPE_2D, .f = {.bpp = 4, .bw = 1, .bh = 1}};
+    Surf source[160] = {{0}};
+    for (unsigned i = 0; i < 160; i++) {
+        source[i].w = source[i].h = 33; /* unrelated geometry at overlapping addresses */
+        source[i].f = texture.f;
+        source[i].copied[0].t = &texture;
+        take_sources[i] = &source[i];
+    }
+    source[159].w = source[159].h = 32; /* the second mip is compatible */
+    CHECK(take_shape(&source[159], &texture));
+    CHECK(!take_shape(&source[0], &texture));
+    take_count = 160;
+    unsigned before = take_queries;
+    tex_take_drawn(&texture);
+    CHECK(take_queries == before + 2); /* a range larger than the stack scratch */
+    tex_take_drawn(&texture);
+    CHECK(take_queries == before + 2); /* candidates reused, content still checked */
+    CHECK(g_vk_hot.take_static > 0);
+    u64 unchanged = g_vk_hot.take_static;
+    take_content++;
+    tex_take_drawn(&texture);
+    CHECK(g_vk_hot.take_static == unchanged); /* source writes revisit the per-target generations */
+    tex_take_drawn(&texture);
+    CHECK(g_vk_hot.take_static == unchanged + 1);
+
+    u32 set = ((uintptr_t)&texture >> 6) & (TAKE_SETS - 1);
+    int found = 0;
+    for (unsigned i = 0; i < TAKE_WAYS; i++)
+        if (g_take_cache.entries[set][i].texture == &texture) { CHECK(g_take_cache.entries[set][i].count == 1); found = 1; }
+    CHECK(found);
+    Surf volume = texture, wide = source[0];
+    volume.type = VK_IMAGE_VIEW_TYPE_3D;
+    wide.w = 128;
+    wide.h = 64;
+    CHECK(take_shape(&wide, &volume)); /* 3D slices may have wider rows than a 2D GOB match */
+    CHECK(!take_shape(&wide, &texture));
+    take_generation++; /* new target, parking, or unparking */
+    tex_take_drawn(&texture);
+    CHECK(take_queries == before + 4);
+    g_vk_surf_epoch++; /* destruction/address reuse */
+    tex_take_drawn(&texture);
+    CHECK(take_queries == before + 6);
+    take_count = 0;
+    take_generation++;
+    tex_take_drawn(&texture);
+    tex_take_drawn(&texture);
+    CHECK(take_queries == before + 7); /* negative candidates cached too */
+    memset(&g_take_cache, 0, sizeof g_take_cache);
+}
+
 int main(void) {
+    take_candidates();
     fill();
     g_vk.alloc_cap = 256ull << 20;
     /* the video's picture: 1920 wide in 4 byte pixels, rows of whole pieces, 16 GOBs a block */

@@ -172,6 +172,16 @@ hides those), a link inside the folder, and on a phone a folder of an app or a c
 cannot be copied is named with the system's reason. On Android and iOS the box has Add Mod and no Open Mods Folder or
 Open Cheats Folder, as a phone has no file manager to show a folder in.
 
+The inkypaint launchers also accept complete Atmosphere-style bundles. Add the whole
+folder or archive containing `atmosphere/` and companion folders such as `flexlion3/`.
+The launcher installs code/files as `exefs/` and `romfs/`, and companion directories
+under the installed mod's `sdmc/`. Enabled mods expose those directories through the
+game's SD-card filesystem in mod-name order. Configuration writes persist in the
+installed data; unrelated SD files remain available. Disable the mod to stop mounting
+its companion data. Old imports that discarded companions must be re-added from the
+complete original bundle. This supports the file layout; it does not emulate
+Atmosphere itself or guarantee that every code mod is compatible.
+
 A mod's `exefs/` changes the game's code, which ScarletNX compiles ahead of time. The game's stamp (`<id>.abi`) records
 the mods' ExeFS files it was recompiled with, and playing it through the driver or the launcher recompiles it when the
 mods played have other ones. Run directly, a game made with other mods' files runs the ExeFS it was made from, and the
@@ -575,10 +585,26 @@ printf '\n\n\n\n\nAogo\n' | ./build/scarletnx --setup  # its answers a line each
 A run whose stdin or stdout is no terminal (a pipe, the launcher's runs) asks nothing. With `--no-setup` nothing is
 written, so a data folder with no users.ini plays as `Player`, uid `0123456789abcdeffedcba9876543210`.
 
+## Graphics presets
+
+The launcher has Performance, Balanced and Quality presets. Pick one, then change whatever you want below it.
+Performance starts with a 0.75× scene ceiling, dynamic resolution down to 0.5×, shadows and several effects off,
+and lighter texture filtering. Balanced uses a 1× ceiling with dynamic resolution. Quality uses a fixed 1.5×
+scene and 16× filtering. All three keep the game's own frame pace.
+
+Scene resolution now goes through the game's renderer. The UI keeps its normal resolution and centered 16:9
+layout, and the lighting data keeps the sizes it needs. 1× follows the game's current scene resolution, which
+can differ between scenes and display modes. It does not always mean 1080p.
+
+Dynamic resolution follows GPU work, with a minimum and a maximum you can choose. It changes only the scene,
+leaving game logic alone. A CPU bottleneck can still slow a match even at a lower resolution. Texture detail
+uses a mip bias, so it reduces sampling detail without claiming to free texture memory.
+
 ## Settings / input
 
 `Game.ini`: help rewritten at startup, most settings hot-reload. `--key=value` overrides one run.
-Restart for `docked`, `fullscreen`, `language`, `resolution`, `anisotropy`, `memory_gb`, `heap_max_mb`, `airplane_mode`,
+Restart for `docked`, `fullscreen`, `language`, `resolution`, `dynamic_resolution`, `dynamic_resolution_min`,
+`dynamic_resolution_fps`, `shadows`, `bloom`, `depth_of_field`, `vignette`, `fog`, `texture_lod_bias`, `anisotropy`, `memory_gb`, `heap_max_mb`, `airplane_mode`,
 `ldn`, `room`, `pipeline_threads`, `prepare_shaders`, `jit_threads`, and the `[Debug]` settings other than `log`, `auto_stub_ipc` and `diag`.
 `scarletnx --settings` prints each setting the launcher's Settings offer, one a line: its section, key, default,
 type, range and help, tab-separated. Every setting, the recompiler's too, is described once in
@@ -593,7 +619,16 @@ type, range and help, tab-separated. Every setting, the recompiler's too, is des
 | `showcase` | `0` | `1` draws player 1's buttons and sticks, as the game gets them, and the frames a second in a corner of the window, for a video. F6 turns it on and off |
 | `showcase_corner` | `br` | The corner `showcase` draws in: `tl` top left, `tr` top right, `bl` bottom left, `br` bottom right |
 | `resolution` | `1` | Internal 3D scale, `0.25` to `4`: `1` native, `2` double, `0.75` and `0.5` faster |
-| `shadows` | `1` | `0` skips shadow maps |
+| `shadows` | `1` | `0` disables depth shadows and shadow post-processing |
+| `bloom` | `1` | `0` disables bloom |
+| `depth_of_field` | `1` | `0` disables focus blur |
+| `vignette` | `1` | `0` disables the vignette pass |
+| `fog` | `1` | `0` disables depth and height fog |
+| `dynamic_resolution` | `0` | `1` adjusts the scene scale to completed GPU work. `resolution` is its ceiling |
+| `dynamic_resolution_min` | `0.5` | Lowest scene scale, capped by the ceiling |
+| `dynamic_resolution_fps` | `60` | GPU frame budget, from `30` to `120`. Does not set game speed or the frame-rate limit |
+| `texture_lod_bias` | `0` | `1` to `3` samples coarser mipmaps on filtered 3D surfaces. Texture allocations stay the same |
+| `presentation_filter` | `1` | Final window resize: `1` linear, `0` nearest. The game upscales its scene separately |
 | `vsync` | `1` | Images are shown only on the display's refresh, so nothing tears. `0` doesn't wait for it: the newest image is shown on the next refresh where the display can do that, else at once (which may tear). A display that can do neither waits for the refresh as `1` does |
 | `anisotropy` | `0` | Texture filtering as the game asks. `2` to `16` sharpens surfaces seen at an angle |
 | `fps_limit` | `game` | The pace the game asks for, as on the console: 60 FPS, or 30 for a game made for 30. `0` is unlimited, and `10` to `1000` is that many FPS |
@@ -611,6 +646,8 @@ type, range and help, tab-separated. Every setting, the recompiler's too, is des
 | `touch` | `2` | The game's touch screen: `2` fingers and the mouse's left button, `1` fingers, `0` off |
 | `controls` | `1` on Android, else `0` | The [on-screen controls](#on-screen-controls) shown |
 | `controls_snap`, `controls_scale`, `controls_opacity`, `controls_rel_center`, `controls_dpad_slide`, `controls_haptics` | `0`, `50`, `100`, `1`, `1`, `1` | As [On-screen controls](#on-screen-controls) describes them. `controls_scale` runs from `0` to `100` for 50% to 150% |
+| `keyboard_mouse_enabled` | `1` | Keyboard play, mouse aim, menu clicks and mouse touch input. Physical controller activity takes priority until it has been idle for 1.5 seconds |
+| `gamepad_menu_layout` | `0` | Swap A/B and X/Y in detected menus, and A/B alone while a visible A-button interaction guide is shown; restore gameplay mappings outside. Prompts retain Nintendo labels |
 | `gamepad_swap_ab` | `0` | `1` swaps a gamepad's A and B. `0` sends A, B, X and Y where the console's are |
 | `gamepad_map` | none | The player's map over that, below |
 | `gamepad_deadzone` | `20` | The sticks' dead zone, in percent of their travel (`0` to `90`) |

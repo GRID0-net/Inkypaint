@@ -6,11 +6,20 @@ import SwiftUI
 /// (Show Settings File) and, later, in the game's own menu.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    var inputPage = ""
+    private var shownGroups: [SettingGroup] {
+        SettingsCatalog.groups.filter { group in
+            if inputPage == "keyboard" { return ["Keyboard and mouse", "Keys in menus"].contains(group.title) }
+            if inputPage == "controller" { return group.title == "Controller input" }
+            return !["Keyboard and mouse", "Keys in menus", "Controller input"].contains(group.title)
+        }
+    }
     @State private var confirmReset = false
 
     var body: some View {
         let settings = model.settings
         Form {
+            if !inputPage.isEmpty { Button("Back to Settings") { model.pane = .settings } }
             if model.isPlaying {
                 Section {
                     Label("The game is running. Settings marked “next launch” apply when you start it again.",
@@ -25,8 +34,21 @@ struct SettingsView: View {
                 }
             }
 
-            ForEach(SettingsCatalog.groups) { group in
+            ForEach(shownGroups) { group in
                 Section {
+                    if group.title == "Graphics" {
+                        HStack {
+                            ForEach(["Performance", "Balanced", "Quality"], id: \.self) { preset in
+                                Button(preset) { settings.applyGraphicsPreset(preset) }
+                            }
+                        }
+                        Text("Settings marked next launch need a restart. Change individual settings below.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if group.title == "Controls" {
+                        Button("Change keyboard input") { model.pane = .keyboardInput }
+                        Button("Change controller input") { model.pane = .controllerInput }
+                    }
                     ForEach(group.settings) { def in row(def, settings) }
                 } header: {
                     HStack(spacing: 10) {
@@ -59,7 +81,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Settings")
+        .navigationTitle(inputPage == "keyboard" ? "Keyboard input" : inputPage == "controller" ? "Controller input" : "Settings")
         .disabled(!model.isPrepared && !settings.exists)
         .overlay {
             if !model.isPrepared && !settings.exists {
@@ -76,7 +98,7 @@ struct SettingsView: View {
                 .padding(40)
             }
         }
-        .confirmationDialog("Reset the game's settings shown here to their defaults?", isPresented: $confirmReset) {
+        .confirmationDialog("Reset all game settings to their defaults?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive) { settings.resetAll() }
         }
         .onAppear { settings.reload() }
@@ -85,6 +107,12 @@ struct SettingsView: View {
     @ViewBuilder
     private func row(_ def: SettingDef, _ settings: GameSettings) -> some View {
         switch def.kind {
+        case .controllerMap:
+            ForEach(SettingsCatalog.controllerControls, id: \.key) { control in
+                Picker(control.title, selection: Binding(get: { settings.controllerValue(control.key) }, set: { settings.setControllerMapping(control.key, $0) })) {
+                    ForEach(SettingsCatalog.controllerButtons, id: \.self) { Text($0).tag($0) }
+                }
+            }
         case .toggle:
             Toggle(isOn: Binding(get: { settings.toggle(def) }, set: { settings.set(def, $0 ? "1" : "0") })) {
                 title(def)
@@ -94,6 +122,12 @@ struct SettingsView: View {
             choice(def, settings, NetworkAdapter.choices())
         case .choice(let options):
             choice(def, settings, options)
+        case .key(let fallback):
+            LabeledContent {
+                KeyCaptureField(current: settings.value(def), fallback: fallback) { settings.set(def, $0) }
+            } label: {
+                title(def)
+            }
         }
     }
 
@@ -109,6 +143,7 @@ struct SettingsView: View {
         } label: {
             title(def)
         }
+        .disabled(def.key == "fps_limit" && !settings.smoothMotionEnabled)
     }
 
     @ViewBuilder

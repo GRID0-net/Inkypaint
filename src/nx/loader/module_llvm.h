@@ -15,6 +15,7 @@ typedef struct {
        module's objects without the runtime library (recompiler/llvm/objects_pack.h), which the loading app has for its
        own machine. NULL: a module for this host */
     const char* triple;
+    int native_library; /* explicit triple linked as a native library, not an executable-memory object pack */
     char opt;           /* -O letter */
     unsigned jobs;
     int quiet;

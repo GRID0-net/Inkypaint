@@ -691,7 +691,7 @@ static CsPipe* cs_pipe(const u8* code, u32 lx, u32 ly, u32 lz, u32 shm, CsKey k)
                                                 .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                                                 .module = m,
                                                 .pName = "main"},
-                                      .layout = g_vk_playout};
+                                      .layout = vk_compute_playout()};
     if (!VK_OK(vkCreateComputePipelines(g_vk.dev, vk_pipeline_cache(), 1, &ci, NULL, &p->p))) p->failed = 1;
     vkDestroyShaderModule(g_vk.dev, m, NULL);
     if (!p->failed)
@@ -1113,7 +1113,8 @@ rebind:
                                            .dstSet = set,
                                            .dstBinding = SNX_VKB_CB + i,
                                            .descriptorCount = 1,
-                                           .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                           .descriptorType = vk_dynamic_cbuf_index((u32)i) >= 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                                                                           : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                            .pBufferInfo = &bi[nw]};
             nw++;
         }
@@ -1436,7 +1437,9 @@ rebind:
         rec_CmdPipelineBarrier2(cb, &cdi);
     }
     rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p->p);
-    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, g_vk_playout, 0, 1, &set, 0, NULL);
+    u32 dynamic_offsets[VK_DYNAMIC_CBUFS] = {0}; /* compute retains its descriptor offsets */
+    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, vk_compute_playout(), 0, 1, &set,
+                             vk_dynamic_cbuf_count(), dynamic_offsets);
     rec_CmdDispatch(cb, gx, gy, gz);
     if (resident) {
         vk_all_barrier(cb); /* its writes before what reads them next */

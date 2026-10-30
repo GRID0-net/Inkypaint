@@ -191,6 +191,8 @@ int snx_ir_module_object(SnxIr* ir, LLVMModuleRef module, char opt, unsigned cha
                          size_t error_size);
 /* The runtime library (rtlib.c) as a host object file (malloc'd): its bitcode, embedded when the recompiler was
    built, compiled for this machine like the generated code */
+int snx_ir_rtlib_object_target(char opt, const char* triple, unsigned char** data, size_t* size,
+                               char* error, size_t error_size);
 int snx_ir_rtlib_object(char opt, unsigned char** data, size_t* size, char* error, size_t error_size);
 /* The same for a 32-bit module's library (armlib.c: the AArch32 blocks' helpers) */
 int snx_ir_armlib_object(char opt, unsigned char** data, size_t* size, char* error, size_t error_size);

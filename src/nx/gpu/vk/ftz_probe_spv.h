@@ -8,5 +8,8 @@
 
 extern const u32 ftz_probe_spv[];
 extern const u64 ftz_probe_spv_size; /* in bytes */
+/* Same arithmetic with the advertised DenormFlushToZero execution mode. */
+extern const u32 ftz_mode_probe_spv[];
+extern const u64 ftz_mode_probe_spv_size;
 
 #endif

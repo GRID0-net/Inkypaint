@@ -3,7 +3,7 @@
 #ifndef INKYPAINT_FRAMERATE_H
 #define INKYPAINT_FRAMERATE_H
 /* Exact-version development hooks, inactive by default. INKYPAINT_FRAME_TRACE enables graph diagnostics.
-   INKYPAINT_RENDER_HZ=120 enables experimental task gating and render-camera interpolation. Skeletal interpolation is unfinished. */
+   INKYPAINT_RENDER_HZ=61..240 enables experimental task gating and render-camera interpolation. Skeletal interpolation is unfinished. */
 void inkypaint_framerate_init(void);
 int inkypaint_framerate_target(void);
 /* what the calling thread runs: 1 a hooked job in a frame that steps the game, 2 one in an extra frame drawn

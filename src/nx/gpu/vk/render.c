@@ -13,6 +13,7 @@
 #include <string.h>
 #include "nx/runtime/options.h"
 #include "nx/runtime/inkypaint_display.h"
+#include "nx/runtime/inkypaint_graphics.h"
 #include "nx/gpu/gpu.h"
 #include "nx/gpu/renderer.h"
 #include "nx/gpu/shader/shader.h"
@@ -1131,48 +1132,70 @@ VkSampler vk_tex_bind_sampler(const u32* tsc, const ShTex* st, int num, const Su
 
 /* a constant buffer's bytes for this draw, reused while the guest can't have changed them */
 static int cb_get(const GpuChannel* ch, int stage, int i, u32 sz, VkBuffer* buf, u64* off) {
-    static struct {
+    typedef struct {
         u64 a, gw, frame, cs_adds, gfx_adds;
         u32 sz, epoch;
         VkBuffer buf;
         u64 off;
-    } c[5][18];
-    u64 a = ch->cbind[stage][i];
-    int pending;
-    /* checked as it is cached, with no compute or graphics result added since: none can cover it, and only a write of
-       its memory leaves the copy stale. The pending checks were the most of cb_get's time in one game */
-    if (a && c[stage][i].a == a && c[stage][i].epoch == g_vk_epoch && c[stage][i].frame == vk_submit_number() &&
-        c[stage][i].sz >= sz && c[stage][i].cs_adds == vk_compute_adds() && c[stage][i].gfx_adds == vk_buf_adds() &&
-        !gpu_mem_dirty_since(c[stage][i].gw, a, sz)) {
-        *buf = c[stage][i].buf;
-        *off = c[stage][i].off;
+    } CbEntry;
+    static struct {
+        CbEntry entry[1024];
+        u16 last[5][18];
+        u8 next[256];
+    } cache;
+    u64 a = ch->cbind[stage][i], frame = vk_submit_number();
+    u32 at = cache.last[stage][i];
+    CbEntry* e = &cache.entry[at];
+    /* Keep the previous binding's single-load fast path, but actors/materials that
+       alternate buffers now retain their copies, shared across shader stages too. */
+    if (!e->buf || e->a != a || e->epoch != g_vk_epoch || e->frame != frame || e->sz < sz) {
+        u64 hash = (a >> 4) * 0x9e3779b97f4a7c15ull;
+        u32 bucket = (u32)(hash >> 56), first = bucket * 4;
+        at = first + cache.next[bucket];
+        for (u32 j = 0; j < 4; j++) {
+            CbEntry* candidate = &cache.entry[first + j];
+            if (candidate->buf && candidate->a == a && candidate->epoch == g_vk_epoch &&
+                candidate->frame == frame && candidate->sz >= sz) {
+                at = first + j;
+                g_vk_hot.cb_shared++;
+                break;
+            }
+            if (candidate->frame != frame || candidate->epoch != g_vk_epoch) at = first + j;
+        }
+        cache.last[stage][i] = (u16)at;
+        cache.next[bucket] = (u8)((at - first + 1) & 3);
+        e = &cache.entry[at];
+    }
+    int matches = e->buf && e->a == a && e->epoch == g_vk_epoch && e->frame == frame && e->sz >= sz;
+    /* Pending GPU outputs invalidate reuse before any CPU-memory check, exactly as
+       in the original last-binding cache. Zero bindings share immutable zero bytes. */
+    if (matches && (!a || (e->cs_adds == vk_compute_adds() && e->gfx_adds == vk_buf_adds() &&
+                          !gpu_mem_dirty_since(e->gw, a, sz)))) {
+        *buf = e->buf;
+        *off = e->off;
+        g_vk_hot.cb_kept++;
         return 1;
     }
-    /* Pending compute results there land first. A pending graphics result is newer than the guest memory the checks
-       below see: the buffer then comes from vk_buf_get_strict, which reads it on the GPU, and isn't cached */
     if (g_cs_any && a) vk_compute_mem_need(a, sz);
-    pending = g_gfx_any && a && vk_buf_pending(a, sz);
-    if (!pending && a && c[stage][i].a == a && c[stage][i].epoch == g_vk_epoch &&
-        c[stage][i].frame == vk_submit_number() && c[stage][i].sz >= sz &&
-        !gpu_mem_dirty_since(c[stage][i].gw, a, sz)) {
-        *buf = c[stage][i].buf;
-        *off = c[stage][i].off;
+    int pending = g_gfx_any && a && vk_buf_pending(a, sz);
+    /* Resolving compute can submit/recycle staging. Recheck its lifetime after that call. */
+    matches = e->buf && e->a == a && e->epoch == g_vk_epoch &&
+              e->frame == vk_submit_number() && e->sz >= sz;
+    if (!pending && matches && (!a || !gpu_mem_dirty_since(e->gw, a, sz))) {
+        *buf = e->buf;
+        *off = e->off;
+        /* Keep the original pending-output proof: this lookup may cover only a
+           prefix of the larger cached buffer, not the whole entry. */
+        g_vk_hot.cb_kept++;
         return 1;
     }
+    g_vk_hot.cb_fetch++;
     if (!(a ? vk_buf_get_strict(a, sz, buf, off) : vk_buf_copy(a, sz, buf, off))) return 0;
-    if (pending) {
-        c[stage][i].a = 0;
-        return 1;
-    }
-    c[stage][i].a = a;
-    c[stage][i].cs_adds = vk_compute_adds();
-    c[stage][i].gfx_adds = vk_buf_adds();
-    c[stage][i].gw = gpu_mem_generation();
-    c[stage][i].frame = vk_submit_number();
-    c[stage][i].sz = sz;
-    c[stage][i].epoch = g_vk_epoch;
-    c[stage][i].buf = *buf;
-    c[stage][i].off = *off;
+    /* A GPU-owned binding must be resolved on every use, not installed as CPU data. */
+    if (pending) return 1;
+    *e = (CbEntry){.a = a, .gw = gpu_mem_generation(), .frame = vk_submit_number(),
+                   .cs_adds = vk_compute_adds(), .gfx_adds = vk_buf_adds(), .sz = sz,
+                   .epoch = g_vk_epoch, .buf = *buf, .off = *off};
     return 1;
 }
 
@@ -1682,24 +1705,28 @@ static VkDescriptorSet desc_set_cached(VkDescriptorSetLayout layout, DescWrites*
     }
     VkDescriptorSet set = vk_rec_new_set(layout, d->n, d->w); /* made on the recording thread, before it is bound */
     if (!set) return VK_NULL_HANDLE;
+    for (u32 i = 0; i < d->n; i++) {
+        if (d->w[i].pImageInfo) g_vk_hot.descriptor_images += d->w[i].descriptorCount;
+        else g_vk_hot.descriptor_buffers += d->w[i].descriptorCount;
+    }
     g_vk_dset_new++;
     cache[bucket].way[victim] = (CachedSet){h1, h2, frame, set};
     cache[bucket].next = (victim + 1) & 3;
     return set;
 }
 static VkDescriptorSet stage_set_(GpuChannel* ch, int stage, VkSh* s, Surf** rt, Surf* zt, u32 n, int* zt_ro,
-                                  u32* fb, TexRes* res, const VkDrawStorage* draw, DrawImages* images);
+                                  u32* fb, TexRes* res, const VkDrawStorage* draw, DrawImages* images, u32* dynamic, VkDescriptorSet* textures);
 static VkDescriptorSet stage_set(GpuChannel* ch, int stage, VkSh* s, Surf** rt, Surf* zt, u32 n, int* zt_ro, u32* fb,
-                                 TexRes* res, const VkDrawStorage* draw, DrawImages* images) {
+                                 TexRes* res, const VkDrawStorage* draw, DrawImages* images, u32* dynamic, VkDescriptorSet* textures) {
     SNX_ZONE(z, "stage set");
-    VkDescriptorSet set = stage_set_(ch, stage, s, rt, zt, n, zt_ro, fb, res, draw, images);
+    VkDescriptorSet set = stage_set_(ch, stage, s, rt, zt, n, zt_ro, fb, res, draw, images, dynamic, textures);
     SNX_ZONE_END(z);
     return set;
 }
 static VkDescriptorSet stage_set_(GpuChannel* ch, int stage, VkSh* s, Surf** rt, Surf* zt, u32 n, int* zt_ro,
-                                  u32* fb, TexRes* res, const VkDrawStorage* draw, DrawImages* images) {
+                                  u32* fb, TexRes* res, const VkDrawStorage* draw, DrawImages* images, u32* dynamic, VkDescriptorSet* textures) {
     u32* r = ch->r3d;
-    VkDescriptorSetLayout layout = g_vk_dslayout[s->indexed][shader_vk_set(stage)];
+    VkDescriptorSetLayout layout = vk_graphics_dslayout(s->indexed, stage, 0);
     VkDescriptorSet set = VK_NULL_HANDLE; /* the writes take it once their contents are known (desc_set_cached) */
     DescWrites d;
     d.n = 0;
@@ -1709,7 +1736,14 @@ static VkDescriptorSet stage_set_(GpuChannel* ch, int stage, VkSh* s, Surf** rt,
         VkBuffer b;
         u64 o;
         if (!cb_get(ch, stage, i, sz, &b, &o)) return VK_NULL_HANDLE;
-        dw_buffer(&d, set, SNX_VKB_CB + i, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, b, o, sz);
+        int dynamic_at = vk_dynamic_cbuf_index((u32)i);
+        VkDescriptorType kind = dynamic_at >= 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                                              : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        if (kind == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC && o <= 0xffffffffull) {
+            dynamic[dynamic_at] = (u32)o;
+            o = 0;
+        }
+        dw_buffer(&d, set, SNX_VKB_CB + i, kind, b, o, sz);
     }
     for (int i = 0; i < s->si.ngbuf && i < 16; i++) {
         const VkDrawGbuf* gb = &draw->b[stage ? 1 : 0][i];
@@ -1884,6 +1918,21 @@ static VkDescriptorSet stage_set_(GpuChannel* ch, int stage, VkSh* s, Surf** rt,
                                             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                             .pImageInfo = &d.ii[binding]};
     }
+    if (g_shader_texture_set_base && (stage == ST_VS || stage == ST_FS)) {
+        /* Constants vary per actor/draw; samplers usually vary only per material.
+           Cache the two independently so new constants don't rewrite all images. */
+        DescWrites material;
+        material.n = 0;
+        u32 buffers = 0;
+        for (u32 i = 0; i < d.n; i++)
+            if (d.w[i].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+                material.w[material.n++] = d.w[i];
+            else
+                d.w[buffers++] = d.w[i];
+        d.n = buffers;
+        *textures = desc_set_cached(vk_graphics_dslayout(s->indexed, stage, 1), &material);
+        if (!*textures) return VK_NULL_HANDLE;
+    }
     return desc_set_cached(layout, &d);
 }
 
@@ -1902,7 +1951,8 @@ static struct {
     VkPipeline pipe;
     VkPipelineLayout layout; /* the one sets were bound through: another may disturb them */
     int async_pipeline;
-    VkDescriptorSet sets[5];
+    VkDescriptorSet sets[7];
+    u32 dynamic_offsets[5][VK_DYNAMIC_CBUFS];
     u32 fb, cull, front, topo, restart, discard, bias_on, dt, dw, dcmp, dbounds, st;
     VkViewport vp[GUEST_VIEWPORTS];
     VkRect2D sc[GUEST_VIEWPORTS];
@@ -2655,7 +2705,7 @@ retry:
         last_cw = rt[0]->w;
         last_ch = rt[0]->h;
     }
-    if (!g_settings.shadows && !n && zt && (zt->w != last_cw || zt->h != last_ch)) {
+    if (!g_settings.shadows && !inkypaint_graphics_engine_scale() && !n && zt && (zt->w != last_cw || zt->h != last_ch)) {
         /* shadows=0: depth-only passes at another size (shadow maps) are skipped, and the map is cleared to far once
            a frame so it reads as fully lit */
         static u32 cleared_frame = ~0u;
@@ -2769,8 +2819,10 @@ retry:
     int zt_ro = 0;
     u32 fb = 0;
     DrawImages images = {0};
-    VkDescriptorSet vset = stage_set(ch, 0, vs, rt, zt, n, &zt_ro, NULL, NULL, &storage, NULL);
-    VkDescriptorSet fset = fs ? stage_set(ch, 4, fs, rt, zt, n, &zt_ro, &fb, fres, &storage, &images) : VK_NULL_HANDLE;
+    u32 dynamic_offsets[5][VK_DYNAMIC_CBUFS] = {{0}};
+    VkDescriptorSet texture_sets[2] = {0};
+    VkDescriptorSet vset = stage_set(ch, 0, vs, rt, zt, n, &zt_ro, NULL, NULL, &storage, NULL, dynamic_offsets[0], &texture_sets[0]);
+    VkDescriptorSet fset = fs ? stage_set(ch, 4, fs, rt, zt, n, &zt_ro, &fb, fres, &storage, &images, dynamic_offsets[1], &texture_sets[1]) : VK_NULL_HANDLE;
     /* the sets of the stages between, at their stage's index (shader_vk_set) */
     between[0] = tcs;
     between[1] = tes;
@@ -2784,7 +2836,7 @@ retry:
             bset_ok = 0;
             break;
         }
-        bset[b] = stage_set(ch, b + 1, between[b], rt, zt, n, &zt_ro, NULL, NULL, &storage, NULL);
+        bset[b] = stage_set(ch, b + 1, between[b], rt, zt, n, &zt_ro, NULL, NULL, &storage, NULL, dynamic_offsets[b + 2], NULL);
         if (!bset[b]) bset_ok = 0;
     }
     if (!vset || (fs && !fset) || !bset_ok) {
@@ -3053,15 +3105,36 @@ retry:
         memset(g_dyn.sets, 0, sizeof g_dyn.sets);
         g_dyn.layout = layout;
     }
-    if (fresh || g_dyn.sets[0] != vset || (fs && g_dyn.sets[1] != fset)) {
+    u32 ndynamic = vk_dynamic_cbuf_count();
+    if (fresh || g_dyn.sets[0] != vset || (fs && g_dyn.sets[1] != fset) ||
+        memcmp(g_dyn.dynamic_offsets[0], dynamic_offsets[0], sizeof dynamic_offsets[0]) ||
+        (fs && memcmp(g_dyn.dynamic_offsets[1], dynamic_offsets[1], sizeof dynamic_offsets[1]))) {
         g_dyn.sets[0] = vset;
         g_dyn.sets[1] = fs ? fset : VK_NULL_HANDLE;
-        rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, fs ? 2 : 1, sets, 0, NULL);
+        memcpy(g_dyn.dynamic_offsets[0], dynamic_offsets[0], sizeof dynamic_offsets[0]);
+        memcpy(g_dyn.dynamic_offsets[1], dynamic_offsets[1], sizeof dynamic_offsets[1]);
+        u32 offsets[2 * VK_DYNAMIC_CBUFS] = {0};
+        memcpy(offsets, dynamic_offsets[0], ndynamic * sizeof *offsets);
+        memcpy(offsets + ndynamic, dynamic_offsets[1], ndynamic * sizeof *offsets);
+        rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, fs ? 2 : 1, sets,
+                                 ndynamic * (fs ? 2 : 1), offsets);
     }
     for (b = 0; b < 3; b++)
-        if (bset[b] && (fresh || g_dyn.sets[2 + b] != bset[b])) {
+        if (bset[b] && (fresh || g_dyn.sets[2 + b] != bset[b] ||
+                       memcmp(g_dyn.dynamic_offsets[b + 2], dynamic_offsets[b + 2], sizeof dynamic_offsets[0]))) {
             g_dyn.sets[2 + b] = bset[b];
-            rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, (u32)b + 2, 1, &bset[b], 0, NULL);
+            memcpy(g_dyn.dynamic_offsets[b + 2], dynamic_offsets[b + 2], sizeof dynamic_offsets[0]);
+            rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, (u32)b + 2, 1, &bset[b],
+                                     ndynamic, dynamic_offsets[b + 2]);
+        }
+    if (g_shader_texture_set_base)
+        for (u32 i = 0; i < 2; i++) {
+            u32 at = g_shader_texture_set_base + i;
+            if (texture_sets[i] && (fresh || g_dyn.sets[at] != texture_sets[i])) {
+                g_dyn.sets[at] = texture_sets[i];
+                rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, at, 1,
+                                         &texture_sets[i], 0, NULL);
+            }
         }
     if (k->nbind)
         rec_CmdBindVertexBuffers2(cb, 0, k->nbind, vbuf, voff, NULL, g_vk.has_dynamic_stride ? pl->stride : NULL);

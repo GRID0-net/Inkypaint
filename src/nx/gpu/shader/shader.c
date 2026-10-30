@@ -38,6 +38,12 @@ int shader_vk_set(int stage) {
     }
 }
 
+int shader_vk_texture_set(int stage) {
+    if (g_shader_texture_set_base && (stage == ST_VS || stage == ST_FS))
+        return (int)g_shader_texture_set_base + (stage == ST_FS);
+    return shader_vk_set(stage);
+}
+
 static i32 sext(u32 value, int bits) {
     return (i32)(value & ((1u << (bits - 1)) - 1)) - (i32)(value & (1u << (bits - 1)));
 }

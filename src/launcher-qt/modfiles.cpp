@@ -23,6 +23,24 @@ bool isDir(const QString& path) {
     QFileInfo f(path);
     return f.isDir() && !f.isSymLink();
 }
+// A downloaded SD bundle puts companion directories beside atmosphere/, not inside the title's ExeFS.
+QStringList sdCompanions(const QString& root, const QString& boundary) {
+    const QDir contents = QFileInfo(root).dir();
+    const QDir atmosphere = QFileInfo(contents.absolutePath()).dir();
+    QString base;
+    if (!QFileInfo(contents.absolutePath()).fileName().compare("contents", Qt::CaseInsensitive) &&
+        !QFileInfo(atmosphere.absolutePath()).fileName().compare("atmosphere", Qt::CaseInsensitive))
+        base = QFileInfo(atmosphere.absolutePath()).dir().absolutePath();
+    else if (isDir(QDir(root).filePath("flexlion3"))) base = root;
+    const QString limit = QFileInfo(boundary).absoluteFilePath();
+    if (base.isEmpty() || QDir(base).isRoot() || (base != limit && !base.startsWith(limit + "/"))) return {};
+    QStringList out;
+    const QStringList excluded{"atmosphere", "contents", "romfs", "exefs", "sdmc", "nintendo", "__macosx"};
+    for (const auto& name : entries(base, QDir::Dirs))
+        if (!name.startsWith('.') && !excluded.contains(name.toLower()) && isDir(QDir(base).filePath(name)))
+            out << QDir(base).filePath(name);
+    return out;
+}
 /// snx_mods_exefs_file: a module of the program (rtld, main, sdk, subsdk<n>) or main.npdm
 bool exefsFile(const QString& name) {
     static const QRegularExpression module("^(rtld|main|sdk|main\\.npdm|subsdk[0-9]*)$");
@@ -58,6 +76,17 @@ bool copyTree(const QString& fromPath, const QString& to, QString* error) {
     const QString from = QFileInfo(fromPath).absoluteFilePath();
     if (!QDir().mkpath(to)) {
         *error = "Couldn't make " + QDir::toNativeSeparators(to) + ".";
+        return false;
+    }
+    const QString canonicalFrom = QFileInfo(from).canonicalFilePath(), canonicalTo = QFileInfo(to).canonicalFilePath();
+#ifdef Q_OS_WIN
+    const auto casing = Qt::CaseInsensitive;
+#else
+    const auto casing = Qt::CaseSensitive;
+#endif
+    if (!isDir(from) || canonicalFrom.isEmpty() || canonicalTo.isEmpty() ||
+        !canonicalTo.compare(canonicalFrom, casing) || canonicalTo.startsWith(canonicalFrom + '/', casing)) {
+        *error = "The mod source is a link or contains the installation folder. Add the original mod bundle from another folder.";
         return false;
     }
     QDirIterator it(from, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
@@ -96,6 +125,7 @@ QString ModFiles::setOff(const QString& off, const QString& name, bool isOff) {
     return names.join(separator);
 }
 
+bool ModFiles::hasSdmc(const QString& mod) { return isDir(QDir(mod).filePath("sdmc")); }
 bool ModFiles::hasRomfs(const QString& mod) { return isDir(QDir(mod).filePath("romfs")); }
 bool ModFiles::hasCode(const QString& mod) {
     QString exefs = QDir(mod).filePath("exefs");
@@ -145,18 +175,22 @@ QString ModFiles::recorded(const QString& abiFile) {
 }
 
 QStringList ModFiles::roots(const QString& base) {
+    const QFileInfo selected(base);
+    if (isDir(base) && (!selected.fileName().compare("romfs", Qt::CaseInsensitive) ||
+                       !selected.fileName().compare("exefs", Qt::CaseInsensitive) || !selected.fileName().compare("sdmc", Qt::CaseInsensitive)))
+        return {selected.absolutePath()};
     QStringList found, queue{base};
     QList<int> depth{0};
-    for (int i = 0; i < queue.size(); ++i) {
+    for (int i = 0; i < queue.size() && i < 4096; ++i) {
         QStringList children = entries(queue[i], QDir::Dirs);
         bool root = false;
         for (const QString& c : children)
-            if (!c.compare("romfs", Qt::CaseInsensitive) || !c.compare("exefs", Qt::CaseInsensitive)) root = true;
+            if (!c.compare("romfs", Qt::CaseInsensitive) || !c.compare("exefs", Qt::CaseInsensitive) || !c.compare("sdmc", Qt::CaseInsensitive)) root = true;
         if (root) {
             found << queue[i];
             continue;
         }
-        if (depth[i] >= 6) continue;
+        if (depth[i] >= 16) continue;
         byBytes(children);
         for (const QString& c : children) {
             QString path = QDir(queue[i]).filePath(c);
@@ -166,6 +200,33 @@ QStringList ModFiles::roots(const QString& base) {
         }
     }
     return found;
+}
+
+QString ModFiles::normalizeInstalled(const QString& mod) {
+    const QString base = QFileInfo(mod).absoluteFilePath();
+    const QStringList payloads = hasRomfs(mod) || hasCode(mod) || hasSdmc(mod) ? QStringList{base} : roots(base);
+    if (payloads.size() != 1)
+        return "No usable romfs/exefs at " + QDir::toNativeSeparators(base) +
+               (payloads.size() > 1 ? "; this folder contains multiple mods. Add the original folder/archive again."
+                                    : ". Check the extracted folders; shortcuts and archives inside an installed folder aren't loaded.");
+    const QString root = QFileInfo(payloads[0]).absoluteFilePath();
+    if (root != base && !root.startsWith(base + '/')) return "The mod payload is outside its installed folder.";
+    const QStringList companions = sdCompanions(root, base);
+    for (const QString& part : entries(root, QDir::Dirs)) {
+        const QString lower = part.toLower();
+        if (lower != "romfs" && lower != "exefs" && lower != "sdmc") continue;
+        const QString from = QDir(root).filePath(part), to = QDir(base).filePath(lower);
+        if (from == to || QFileInfo::exists(to)) continue;
+        if (!isDir(from)) return "The mod payload is a shortcut/link. Add the original folder instead.";
+        if (!QDir().rename(from, to)) return "Couldn't move " + QDir::toNativeSeparators(from) + " to " + QDir::toNativeSeparators(to) + ". Check folder permissions.";
+    }
+    for (const QString& source : companions) {
+        const QString target = QDir(base).filePath("sdmc/" + QFileInfo(source).fileName());
+        if (!QDir().mkpath(QFileInfo(target).path())) return "Couldn't create the mod's SD data folder.";
+        if (QFileInfo::exists(target)) return "Duplicate SD companion folder: " + target + ". Keep one copy or re-add the original bundle.";
+        if (!QDir().rename(source, target)) return "Couldn't move SD companion " + source + ".";
+    }
+    return hasRomfs(base) || hasCode(base) || hasSdmc(base) ? QString() : "The extracted mod has no supported files at " + QDir::toNativeSeparators(base) + ".";
 }
 
 QString ModFiles::freeName(const QString& folder, const QString& wanted, const QString& fallback) {
@@ -183,7 +244,10 @@ QString ModFiles::freeName(const QString& folder, const QString& wanted, const Q
     return free;
 }
 
-bool ModFiles::install(const QString& root, const QString& to, QString* error) {
+bool ModFiles::install(const QString& root, const QString& to, QString* error, const QString& packageBase) {
+    const QString boundary = packageBase.isEmpty() ? root : packageBase;
+    const bool onePart = QStringList{"romfs", "exefs", "sdmc"}.contains(QFileInfo(boundary).fileName().toLower()) &&
+                         QFileInfo(boundary).dir().absolutePath() == QFileInfo(root).absoluteFilePath();
     QFileInfo target(to);
     QString staging = target.dir().filePath(".installing-" + target.fileName());
     QDir(staging).removeRecursively();
@@ -191,8 +255,17 @@ bool ModFiles::install(const QString& root, const QString& to, QString* error) {
     if (!ok) *error = "Couldn't make the mod's folder in " + QDir::toNativeSeparators(target.path()) + ".";
     for (const QString& part : entries(root, QDir::Dirs)) {
         QString lower = part.toLower();
-        if (!ok || (lower != "romfs" && lower != "exefs")) continue;
+        if (!ok || (lower != "romfs" && lower != "exefs" && lower != "sdmc")) continue;
+        if (onePart && QFileInfo(QDir(root).filePath(part)).absoluteFilePath() != QFileInfo(boundary).absoluteFilePath()) continue;
         ok = copyTree(QDir(root).filePath(part), QDir(staging).filePath(lower), error);
+    }
+    for (const QString& companion : sdCompanions(root, boundary)) {
+        if (!ok) break;
+        ok = copyTree(companion, QDir(staging).filePath("sdmc/" + QFileInfo(companion).fileName()), error);
+    }
+    if (ok && !hasRomfs(staging) && !hasCode(staging) && !hasSdmc(staging)) {
+        ok = false;
+        *error = "No usable romfs or exefs was copied from " + QDir::toNativeSeparators(root) + ".";
     }
     if (ok && !QDir().rename(staging, to)) {
         ok = false;

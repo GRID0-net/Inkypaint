@@ -339,6 +339,19 @@ static int check_depth_array(void) {
     g_vk_present += 5;
     CHECK(vk_rt_drawn_in(target->gva, target->gva + target->layer_size * target->layers, drawn, 4) >= 1);
     CHECK(drawn[0] == target && vk_rt_drawn_fresh(target));
+    Surf lookup = {.gva = target->gva, .size = target->layer_size * target->layers,
+                   .h = 32, .levels = 1, .type = VK_IMAGE_VIEW_TYPE_2D, .f = target->f};
+    CHECK(vk_rt_drawn_texture(&lookup, drawn, 4) == 0); /* unrelated mip height */
+    lookup.levels = 2;
+    CHECK(vk_rt_drawn_texture(&lookup, drawn, 4) >= 1 && drawn[0] == target);
+    CHECK(vk_rt_drawn_texture(&lookup, NULL, 0) >= 1); /* count-only first query */
+    u64 revision = vk_rt_drawn_generation();
+    CHECK(vk_zt_array(target->gva, 16, 8, 0x0A, 0x1000, 3, 4096));
+    CHECK(vk_rt_drawn_generation() != revision);
+    CHECK(vk_rt_drawn_texture(&lookup, drawn, 4) == 0); /* parked targets leave both indices */
+    CHECK(vk_zt_array(lookup.gva, 16, 16, 0x0A, 0x1000, 3, 4096) == target);
+    CHECK(vk_rt_drawn_texture(&lookup, drawn, 4) >= 1 && drawn[0] == target);
+
     VkBuffer buffer;
     u8* data = vk_readback_buffer(12, &buffer);
     CHECK(data);
@@ -629,6 +642,67 @@ static int run_storage_compute(const u32* code, size_t words, u32* data, u32 cou
     vkDestroyPipeline(g_vk.dev, pipeline, NULL);
     vkDestroyPipelineLayout(g_vk.dev, playout, NULL);
     vkDestroyDescriptorSetLayout(g_vk.dev, dlayout, NULL);
+    return 0;
+}
+
+#include "support/dynamic_uniform_spv.h"
+/* Exercise the production layouts, deferred descriptor writer and dynamic-offset packet.
+   Distinct nonzero offsets in two sets must keep all four values apart. */
+static int check_dynamic_uniforms(void) {
+    u32 ndynamic = vk_dynamic_cbuf_count();
+    if (ndynamic < 2) return 0; /* bindings 0 and 3 need at least two dynamic slots */
+    VkShaderModuleCreateInfo smi = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = sizeof dynamic_uniform_spv, .pCode = dynamic_uniform_spv};
+    VkShaderModule module;
+    CHECK(vkCreateShaderModule(g_vk.dev, &smi, NULL, &module) == VK_SUCCESS);
+    VkDescriptorSetLayout layouts[2] = {g_vk_dslayout[0][0], g_vk_dslayout[0][0]};
+    VkPipelineLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 2, .pSetLayouts = layouts};
+    VkPipelineLayout layout;
+    CHECK(vkCreatePipelineLayout(g_vk.dev, &lci, NULL, &layout) == VK_SUCCESS);
+    VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, .layout = layout,
+        .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                  .module = module, .pName = "main"}};
+    VkPipeline pipeline;
+    CHECK(vkCreateComputePipelines(g_vk.dev, VK_NULL_HANDLE, 1, &ci, NULL, &pipeline) == VK_SUCCESS);
+    VkBuffer input, output;
+    u64 base, align = vk_stage_align();
+    u32* bytes = (u32*)vk_stage(align * 6, align, &input, &base);
+    u32* readback = (u32*)vk_readback_buffer(16, &output);
+    CHECK(bytes && readback && base + align * 5 <= 0xffffffffull);
+    memset(bytes, 0xcc, (size_t)align * 6);
+    u32 offsets[2 * VK_DYNAMIC_CBUFS] = {0};
+    for (u32 i = 0; i < 4; i++) {
+        bytes[align / 4 * (i + 1)] = (i + 1) * 11;
+        offsets[(i / 2) * ndynamic + i % 2] = (u32)(base + align * (i + 1));
+    }
+    VkDescriptorSet sets[2];
+    for (u32 set = 0; set < 2; set++) {
+        VkDescriptorBufferInfo bi[3] = {{input, 0, 16}, {input, 0, 16}, {output, 0, 16}};
+        VkWriteDescriptorSet writes[3] = {0};
+        for (u32 i = 0; i < (set ? 2u : 3u); i++) {
+            writes[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstBinding = i < 2 ? (i ? 3 : 0) : SNX_VKB_SSBO, .descriptorCount = 1,
+                .descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pBufferInfo = &bi[i]};
+        }
+        sets[set] = vk_rec_new_set(layouts[set], set ? 2 : 3, writes);
+        CHECK(sets[set]);
+    }
+    VkCommandBuffer cb = vk_cmd();
+    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 2, sets, 2 * ndynamic, offsets);
+    rec_CmdDispatch(cb, 1, 1, 1);
+    vk_finish();
+    vk_readback_ready();
+    for (u32 i = 0; i < 4; i++) {
+        if (readback[i] != (i + 1) * 11) fprintf(stderr, "dynamic uniform %u: got %08x expected %u\n", i, readback[i], (i + 1) * 11);
+        CHECK(readback[i] == (i + 1) * 11);
+    }
+    vkDestroyPipeline(g_vk.dev, pipeline, NULL);
+    vkDestroyPipelineLayout(g_vk.dev, layout, NULL);
+    vkDestroyShaderModule(g_vk.dev, module, NULL);
+    vk_render_forget_state();
     return 0;
 }
 
@@ -1119,6 +1193,48 @@ static int check_rt_overlap(void) {
     return 0;
 }
 
+/* Irradiance-style readback: seven small pitched float targets share one CPU
+   page. A CPU consumer must see the rendered texel, including through aliases,
+   and a repeated read must not wait again or overwrite later CPU writes. */
+static int check_rt_cpu_read(void) {
+    GpuChannel* ch = calloc(1, sizeof *ch);
+    CHECK(ch && g_renderer->rt_cpu_read);
+    const u64 offset = 0x60000;
+    const float color[4] = {0.25f, 0.5f, 0.75f, 1};
+    memset(GP(DMA_A + offset), 0, 0x700);
+    u32* r = ch->r3d;
+    r[0x487] = 7;
+    for (u32 i = 0; i < 7; i++) {
+        r[0x487] |= i << (4 + 3 * i);
+        u32* target = &r[0x200 + i * 16];
+        u64 address = DMA_GA + offset + i * 0x100;
+        target[0] = (u32)(address >> 32);
+        target[1] = (u32)address;
+        target[2] = 128; /* pitch: eight float4 texels, two logical columns */
+        target[3] = 2;
+        target[4] = 0xc0;
+        target[5] = 0x1000;
+        target[6] = 1;
+    }
+    memcpy(&r[0x360], color, sizeof color);
+    for (u32 i = 0; i < 7; i++) vk_render_clear(ch, 15 << 2 | i << 6);
+    vk_render_end();
+    CHECK(all_bytes(GP(DMA_A + offset), 16, 0)); /* still GPU-only */
+    for (u32 i = 0; i < 7; i++) {
+        u64 cpu = DMA_A + offset + i * 0x100;
+        g_renderer->rt_cpu_read(cpu + 4, 4); /* an interior range finds the target */
+        CHECK(!memcmp(GP(cpu), color, sizeof color));
+    }
+    u64 finishes = g_vk_finishes;
+    g_renderer->rt_cpu_read(DMA_A + offset, 0x700);
+    CHECK(g_vk_finishes == finishes);
+    memset(GP(DMA_A + offset), 0x35, 16);
+    g_renderer->rt_cpu_read(DMA_A + offset, 16);
+    CHECK(all_bytes(GP(DMA_A + offset), 16, 0x35));
+    free(ch);
+    return 0;
+}
+
 #include "vulkan_shader_invalidate.inc"
 
 int main(int argc, char** argv) {
@@ -1150,6 +1266,8 @@ int main(int argc, char** argv) {
                 CHECK(sizes[i].descriptorCount == SH_MAXTEX * 1024);
         }
     }
+    CHECK(!check_dynamic_uniforms());
+    if (getenv("INKYPAINT_TEST_DYNAMIC_ONLY")) { vk_finish(); puts("PASS dynamic uniform offsets"); return 0; }
     CHECK(!check_hash_copy());
     CHECK(!check_staging_overflow());
     CHECK(!check_buffer_texture_rows());
@@ -1168,6 +1286,7 @@ int main(int argc, char** argv) {
     CHECK(!check_dma());
     CHECK(!check_blit());
     CHECK(!check_rt_overlap());
+    CHECK(!check_rt_cpu_read());
     /* the pipeline workers: pipeline_threads when given, else a quarter of the CPUs, two to six */
     CHECK(vk_pipeline_worker_count(0, 8) == 6 && vk_pipeline_worker_count(0, 12) == 10 &&
           vk_pipeline_worker_count(0, 4) == 2 && vk_pipeline_worker_count(0, 0) == 2 &&

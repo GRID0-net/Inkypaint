@@ -626,7 +626,9 @@ int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, 
     }
     /* link: runtime library, descriptor, chunks. A module for another machine has no runtime library of its own
        (this host has none for that machine): the app that loads it brings its own */
-    if (!build->triple && snx_ir_rtlib_object(build->opt, &rtlib_object, &rtlib_size, error, sizeof(error))) {
+    if ((build->native_library ? snx_ir_rtlib_object_target(build->opt, build->triple, &rtlib_object, &rtlib_size,
+                                                           error, sizeof(error)) :
+         !build->triple && snx_ir_rtlib_object(build->opt, &rtlib_object, &rtlib_size, error, sizeof(error)))) {
         snx_error("LLVM backend: %s", error);
         goto done;
     }
@@ -654,7 +656,7 @@ int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, 
     }
     exports[0] = "snx_module";
     if (variant_count) exports[export_count++] = "snx_variants";
-    if (build->triple) {
+    if (build->triple && !build->native_library) {
         linked.data = snx_objects_pack(inputs, n, &linked.size);
         if (!linked.data) {
             snx_error("packing failed: out of memory");

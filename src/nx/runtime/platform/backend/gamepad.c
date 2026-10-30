@@ -24,6 +24,7 @@ enum { SUM_MAIN, SUM_LEFT, SUM_RIGHT, SUM_SENSORS };
 static SensorSum g_accel_sum[SNX_GAMEPADS][SUM_SENSORS], g_gyro_sum[SNX_GAMEPADS][SUM_SENSORS];
 static char g_names[SNX_GAMEPADS][64]; /* theirs, for the game's menu, which the renderer draws on its thread */
 static int g_labels[SNX_GAMEPADS][4], g_symmetric[SNX_GAMEPADS]; /* and how its button map screen draws them */
+static struct { int menu; unsigned blocked[SNX_GAMEPADS]; } g_menu_layout;
 static unsigned g_held[SNX_GAMEPADS]; /* the controls each holds, a bit each, as last polled */
 #define UNSET SNX_PAD_UNSET
 /* what the settings' maps read into (their values in g_settings) */
@@ -303,6 +304,7 @@ void gamepad_close(u32 id) {
         if (g_pads[i] && SDL_GetGamepadID(g_pads[i]) == id) {
             SDL_CloseGamepad(g_pads[i]);
             g_pads[i] = NULL;
+            g_menu_layout.blocked[i] = 0;
             memset(g_accel_sum[i], 0, sizeof g_accel_sum[i]);
             memset(g_gyro_sum[i], 0, sizeof g_gyro_sum[i]);
             ui_lock();
@@ -332,6 +334,42 @@ static void dz(i32* x, i32* y) {
 /* SDL's Y axes point down, the Switch's up */
 static i32 up(i32 v) { return v == -32768 ? 32767 : -v; }
 
+static void map_of(int slot, SnxPadMap* map);
+/* 0: gameplay, 1: menu (AB/XY), 2: interaction guide (AB only). */
+void gamepad_set_context(int menu, int interaction) {
+    int next = g_settings.xbox_play_station_layout_in_menus ? (menu ? 1 : interaction ? 2 : 0) : 0;
+    int previous = g_menu_layout.menu;
+    SnxPadMap before[SNX_GAMEPADS];
+    if (next == previous) return;
+    for (int i = 0; i < SNX_GAMEPADS; i++)
+        if (g_pads[i]) map_of(i, &before[i]);
+    g_menu_layout.menu = next;
+    for (int i = 0; i < SNX_GAMEPADS; i++)
+        if (g_pads[i]) {
+            SnxPadMap after;
+            map_of(i, &after);
+            for (int c = 0; c < SNX_PAD_CONTROLS; c++)
+                if ((before[i].bit[c] != after.bit[c] || ((previous == 1 || next == 1) && c < 4)) &&
+                    snx_pad_held(g_pads[i], c)) g_menu_layout.blocked[i] |= 1u << c;
+        }
+}
+void gamepad_set_menu(int active) { gamepad_set_context(active, 0); }
+int gamepad_active(void) {
+    for (int i = 0; i < SNX_GAMEPADS; i++) {
+        SDL_Gamepad* g = g_pads[i];
+        if (!g) continue;
+        for (int c = 0; c < SNX_PAD_CONTROLS; c++)
+            if (snx_pad_held(g, c)) return 1;
+        i32 x = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY);
+        dz(&x, &y);
+        if (x || y) return 1;
+        x = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTX); y = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY);
+        dz(&x, &y);
+        if (x || y) return 1;
+    }
+    return 0;
+}
+
 /* what each control of the pad in slot sends (-1: no player's): the button in its place, the map over that (its
    player's, else every player's), then A and B swapped as its player says, else as every player's */
 static void map_of(int slot, SnxPadMap* map) {
@@ -340,8 +378,11 @@ static void map_of(int slot, SnxPadMap* map) {
     snx_pad_map_position(&placed);
     *map = p && p->has_map ? p->own : g_cfg.own;
     snx_pad_map_fill(map, &placed);
-    if (p && g_settings.player_swap_a_b[slot] >= 0 ? g_settings.player_swap_a_b[slot] : g_settings.swap_a_b)
-        snx_pad_map_swap_ab(map);
+    int swap = p && g_settings.player_swap_a_b[slot] >= 0 ? g_settings.player_swap_a_b[slot] : g_settings.swap_a_b;
+    if (g_menu_layout.menu || swap) snx_pad_map_swap_ab(map);
+    if (g_menu_layout.menu == 1)
+        for (int c = 0; c < SNX_PAD_CONTROLS; c++)
+            if (map->bit[c] == 2 || map->bit[c] == 3) map->bit[c] = (signed char)(5 - map->bit[c]);
 }
 /* how strongly the pad in slot vibrates, in percent: its player's, else every player's */
 static u32 strength(int slot) { return (u32)(g_settings.player_vibration[slot] >= 0 ? g_settings.player_vibration[slot] : g_settings.vibration); }
@@ -371,6 +412,7 @@ u64 gamepad_button(u32 id, int button) {
     }
     if (control < 0) return 0;
     for (slot = 0; slot < SNX_GAMEPADS && g_pads[slot] != g; slot++) {}
+    if (slot < SNX_GAMEPADS && (g_menu_layout.blocked[slot] & (1u << control))) return 0;
     map_of(slot < SNX_GAMEPADS ? slot : -1, &map);
     return map.bit[control] < 0 ? 0 : 1ull << map.bit[control];
 }
@@ -406,8 +448,12 @@ void gamepad_state_slot(int slot, u64* buttons, i32 sticks[4]) {
         return;
     }
     map_of(slot, &map);
-    for (c = 0; c < SNX_PAD_CONTROLS; c++)
-        if (snx_pad_held(g, c) && map.bit[c] >= 0) *buttons |= 1ull << map.bit[c];
+    for (c = 0; c < SNX_PAD_CONTROLS; c++) {
+        int held = snx_pad_held(g, c);
+        if (!held) g_menu_layout.blocked[slot] &= ~(1u << c);
+        if (held && !(g_menu_layout.blocked[slot] & (1u << c)) && map.bit[c] >= 0)
+            *buttons |= 1ull << map.bit[c];
+    }
     sticks[0] = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX);
     sticks[1] = up(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY));
     dz(&sticks[0], &sticks[1]);

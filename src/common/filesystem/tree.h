@@ -59,6 +59,9 @@ FsTreeResult fs_tree_graft(FsTree* tree, const char* name, const char* directory
    everything under it, one in merged is laid over it. Any other is left out, the data directory's own kept writable */
 FsTreeResult fs_tree_overlay(FsTree* tree, const char* directory, const char* const* whole,
                              const char* const* merged);
+/* Startup: merge one host directory into a named top-level directory. Writable imports
+   keep their own host paths, so configuration updates persist in the owning mod. */
+FsTreeResult fs_tree_overlay_directory(FsTree* tree, const char* name, const char* directory, int writable);
 void fs_tree_destroy(FsTree* tree);
 /* With no scope, accepts drive:/path, /path (under root/), or paths relative to the data directory.
    A scope makes paths relative to that directory; drive prefixes and traversal above scope are rejected. */

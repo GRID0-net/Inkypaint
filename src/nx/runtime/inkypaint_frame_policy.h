@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+   Copyright 2026 the inkypaint contributors */
+#ifndef INKYPAINT_FRAME_POLICY_H
+#define INKYPAINT_FRAME_POLICY_H
+#include <stdint.h>
+#include <string.h>
+/* A render-only frame must not consume controller edges or advance UI state.
+   Unknown callbacks are simulation, including delegates in the post-calc graph.
+   Only identified graphics maintenance may run without a fixed simulation step. */
+static inline int inkypaint_frame_replay_candidate(uint64_t model_frame, uint64_t frame) {
+    return model_frame <= frame && frame - model_frame <= 1;
+}
+static inline int inkypaint_frame_simulation_job(uint32_t role, const char* name, uint64_t executor) {
+    (void)role;
+    /* GSYS render tasks and GameGfx's graphics delegates can have no name. */
+    if (executor == 0xc7b56f0ull || executor == 0x9366800ull) return 0;
+    if (!strcmp(name, "Graphics") || !strcmp(name, "Resource") || !strcmp(name, "GameGfx") ||
+        !strcmp(name, "GameGfx:PostActorCalc") || !strcmp(name, "GameGfx:UpdateDynamicLight") ||
+        !strcmp(name, "EntryJobsBgGraphics")) return 0;
+    return 1;
+}
+/* Only a simulation sample may replace the authoritative interpolation endpoint.
+   Render-only work may consume a pose already interpolated on the previous frame. */
+static inline int inkypaint_frame_capture(unsigned steps, int history_present) {
+    return steps != 0 || !history_present;
+}
+#endif

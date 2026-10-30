@@ -8,8 +8,8 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: Binding<Pane?>(get: { model.pane }, set: { if let pane = $0 { model.pane = pane } })) {
-                ForEach(Pane.allCases) { pane in
+            List(selection: Binding<Pane?>(get: { model.pane == .keyboardInput || model.pane == .controllerInput ? .settings : model.pane }, set: { if let pane = $0 { model.pane = pane } })) {
+                ForEach(Pane.allCases.filter { $0 != .keyboardInput && $0 != .controllerInput }) { pane in
                     Label(pane.title, systemImage: pane.symbol)
                         .badge(badge(pane))
                         .tag(pane)
@@ -22,6 +22,8 @@ struct RootView: View {
             case .play: PlayView()
             case .online: OnlineView()
             case .settings: SettingsView()
+            case .keyboardInput: SettingsView(inputPage: "keyboard")
+            case .controllerInput: SettingsView(inputPage: "controller")
             case .mods: ModsView()
             case .files: FilesView()
             }

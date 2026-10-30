@@ -64,6 +64,9 @@ typedef struct Renderer {
     /* a 2D blit the GPU's own blit can't do (its source isn't a render target) done on the GPU from memory, its
        destination kept there: 0 when it couldn't be */
     int (*blit_mem)(const GpuBlit* b);
+    /* Land rendered pixels before a CPU read of their guest mapping, after the
+       game's GPU fence. Only overlapping dirty targets need a readback. Any thread. */
+    void (*rt_cpu_read)(u64 cpu_addr, u64 size);
     void (*rt_flush)(u64 gva);  /* a render target at gva is about to be read from guest memory: write it back */
     void (*rt_reload)(u64 gva); /* guest memory under a render target changed: load it again */
     /* a compute launch (q: its QMD's 64 words, converted to host numbers by compute.c) */

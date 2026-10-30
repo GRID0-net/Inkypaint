@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2026 the inkypaint contributors
+#version 450
+layout(local_size_x=1) in;
+layout(set=0,binding=0,std140) uniform A { uvec4 a; };
+layout(set=0,binding=3,std140) uniform B { uvec4 b; };
+layout(set=1,binding=0,std140) uniform C { uvec4 c; };
+layout(set=1,binding=3,std140) uniform D { uvec4 d; };
+layout(set=0,binding=38,std430) buffer Out { uvec4 result; };
+void main() { result = uvec4(a.x,b.x,c.x,d.x); }
