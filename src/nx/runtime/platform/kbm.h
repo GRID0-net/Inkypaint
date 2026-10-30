@@ -46,5 +46,8 @@ void kbm_mouse_moved(float dx, float dy);
    sensor gets the mouse's turn added. Nothing when mouse aim is off or nothing moved and there is no aim to keep */
 void kbm_motion(PadMotion* m, u64 dt_ns);
 void kbm_aim_reset(void); /* the aim's pitch and what it still had to turn, forgotten */
+/* native_mouse_camera: the counts the mouse moved since the last call, taken. 1 with them when keyboard and mouse is
+   enabled and the setting is on, else 0 with both cleared. With the setting on, kbm_motion feeds no gyro */
+int kbm_look_take(float* dx, float* dy);
 
 #endif

@@ -95,6 +95,10 @@ const QVariantList& catalog() {
                            "Click in the game's window and the mouse aims the way motion controls do (turn the game's "
                            "motion controls on). Left Alt lets the mouse go, and the game's menu does too.",
                            "toggle", "1", false),
+                   setting("native_mouse_camera", "Keyboard and mouse", "Native mouse camera",
+                           "The mouse turns the camera directly, like a PC game, with no need for the game's motion "
+                           "controls. When it is off, the original controller camera runs.",
+                           "toggle", "0", false),
                    setting("mouse_sensitivity", "Keyboard and mouse", "Mouse sensitivity",
                            "How far the mouse turns the aim. The game's own motion sensitivity applies on top.", "choice",
                            "100", false,

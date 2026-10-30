@@ -8,6 +8,7 @@
 #include "nx/runtime/inkypaint_display.h"
 #include "nx/runtime/inkypaint_graphics.h"
 #include "nx/runtime/inkypaint_framerate.h"
+#include "nx/runtime/inkypaint_mouselook.h"
 #include "nx/runtime/inkypaint_calltrace.h"
 #include "nx/runtime/inkypaint_ui.h"
 #include "common/cpu/recompiler/llvm/gdb_jit.h"
@@ -945,6 +946,7 @@ int snx_main(int argc, char** argv) {
     inkypaint_display_init();
     inkypaint_graphics_init();
     inkypaint_framerate_init();
+    inkypaint_mouselook_init();
     inkypaint_ui_init();
     inkypaint_calltrace_init(); /* last: it wraps every slot, the hooks above too */
     read_npdm();

@@ -135,6 +135,10 @@ enum SettingsCatalog {
                        detail: "Click in the game's window and the mouse aims the way motion controls do (turn the "
                            + "game's motion controls on). Left Option lets the mouse go, and the game's menu does too.",
                        kind: .toggle, defaultValue: "1"),
+            SettingDef(key: "native_mouse_camera", section: "Keyboard and mouse", title: "Native mouse camera",
+                       detail: "The mouse turns the camera directly, like a PC game, with no need for the game's "
+                           + "motion controls. When it is off, the original controller camera runs.",
+                       kind: .toggle, defaultValue: "0"),
             SettingDef(key: "mouse_sensitivity", section: "Keyboard and mouse", title: "Mouse sensitivity",
                        detail: "How far the mouse turns the aim. The game's own motion sensitivity applies on top.",
                        kind: .choice([("25", "25%"), ("50", "50%"), ("75", "75%"), ("100", "100%"), ("125", "125%"),

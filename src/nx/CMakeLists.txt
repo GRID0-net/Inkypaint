@@ -35,7 +35,7 @@ endfunction()
 
 snx_component(core runtime/main.c runtime/maintenance.c runtime/arm.c runtime/loader.c runtime/rtapi.c runtime/clock.c runtime/crash.c runtime/options.c
               runtime/startup.c runtime/gdbstub.c runtime/present.c runtime/guest_jit.c
-              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_graphics.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c runtime/inkypaint_ui.c)
+              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_mouselook.c runtime/inkypaint_graphics.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c runtime/inkypaint_ui.c)
 target_link_libraries(snx_core PRIVATE snx_driver snx_lz4 snx_build_info)
 target_link_libraries(snx_core PUBLIC snx_settings_runtime) # the game's .ini's tables (cmake/settings.cmake)
 if(APPLE)

@@ -99,6 +99,14 @@ static int wheel_left[2]; /* samples the wheel's up and down bindings stay down 
 static float moved_x, moved_y;
 static float owed_yaw, owed_pitch; /* degrees the mouse turned that no sample has reported yet */
 static float pitch;                /* degrees the controller is tilted up */
+/* counts for native_mouse_camera (kbm_look_take): added on the platform thread, taken on a guest thread */
+static float look_x, look_y;
+
+static void look_add(float* at, float d) {
+    float old = __atomic_load_n(at, __ATOMIC_RELAXED), sum;
+    do sum = old + d;
+    while (!__atomic_compare_exchange(at, &old, &sum, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+}
 
 u64 kbm_control_bit(int control) {
     return control >= 0 && control < SETTINGS_KBM_COUNT && bits[control] >= 0 ? 1ull << bits[control] : 0;
@@ -189,6 +197,13 @@ static void bind_all(void) {
     }
     bound_ready = 1;
 }
+/* a setting of the Keyboard and mouse section, read from the .ini or the command line: options.c hands it here through
+   backend_ini, which nothing else in this section was reading */
+int kbm_ini(const char* key, const char* value) {
+    const IniOpt* o = ini_find(g_kbm_ini, key);
+    if (o) ini_read(o, value);
+    return o != NULL;
+}
 /* settings.txt's set for every key_<control>: the bindings read again, all of them */
 void kbm_bindings_set(const IniOpt* o, const char* v) {
     (void)o, (void)v;
@@ -197,13 +212,6 @@ void kbm_bindings_set(const IniOpt* o, const char* v) {
 
 static int bound_to(int control, int code) {
     for (int i = 0; i < BINDINGS; i++)
-/* a setting of the Keyboard and mouse section, read from the .ini or the command line: options.c hands it here through
-   backend_ini, which nothing else in this section was reading */
-int kbm_ini(const char* key, const char* value) {
-    const IniOpt* o = ini_find(g_kbm_ini, key);
-    if (o) ini_read(o, value);
-    return o != NULL;
-}
         if (bound[in_menu][control][i] == code) return 1;
     return 0;
 }
@@ -259,12 +267,30 @@ u64 kbm_buttons(void) {
 
 void kbm_mouse_moved(float dx, float dy) {
     if (!kbm_enabled()) return;
+    if (g_settings.native_mouse_camera) {
+        look_add(&look_x, dx);
+        look_add(&look_y, dy);
+        return;
+    }
     moved_x += dx;
     moved_y += dy;
 }
+int kbm_look_take(float* dx, float* dy) {
+    float zero = 0;
+    __atomic_exchange(&look_x, &zero, dx, __ATOMIC_RELAXED);
+    zero = 0;
+    __atomic_exchange(&look_y, &zero, dy, __ATOMIC_RELAXED);
+    if (kbm_enabled() && g_settings.native_mouse_camera) return 1;
+    *dx = *dy = 0;
+    return 0;
+}
 void kbm_aim_reset(void) {
+    float zero = 0, gone;
     owed_yaw = owed_pitch = pitch = 0;
     moved_x = moved_y = 0;
+    __atomic_exchange(&look_x, &zero, &gone, __ATOMIC_RELAXED);
+    zero = 0;
+    __atomic_exchange(&look_y, &zero, &gone, __ATOMIC_RELAXED);
 }
 
 void kbm_motion(PadMotion* m, u64 dt_ns) {
@@ -273,6 +299,7 @@ void kbm_motion(PadMotion* m, u64 dt_ns) {
         kbm_aim_reset();
         return;
     }
+    if (g_settings.native_mouse_camera) return; /* the mouse turns the camera itself (kbm_look_take), not the gyro */
     dt = (float)(dt_ns < 1000000u ? 1000000u : dt_ns > 50000000u ? 50000000u : dt_ns) * 1e-9f;
     scale = BASE_DEG * (float)g_settings.mouse_sensitivity / 100.0f;
     /* right turns the aim right: a turn clockwise seen from above, negative about the vertical. Up tilts the

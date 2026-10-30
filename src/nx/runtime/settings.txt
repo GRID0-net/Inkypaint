@@ -474,6 +474,13 @@ setting Mouse aim
     words Off|On
     help 1 = the mouse aims as the controller's motion sensor does (the game's motion controls on) once a click in the
     help window takes it; Free the mouse's key, the menu or another window lets it go
+setting Native mouse camera
+    key native_mouse_camera
+    int 0 1
+    default 0
+    words Off|On
+    help 1 = the mouse turns the player's camera directly, like a PC game, instead of acting as the controller's
+    help motion sensor. Chosen before launch. 0 = the game's own camera code runs unchanged
 setting Mouse sensitivity
     key mouse_sensitivity
     int 5 1000
