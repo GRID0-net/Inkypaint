@@ -154,8 +154,14 @@ missing=$(LD_LIBRARY_PATH="$out/lib" ldd "$out/inkypaint" "$out/plugins/platform
 $missing"
 runtime_libs=$(ldd "$out/runtime/scarletnx" | awk '{print $1}' | grep -vE '^(linux-vdso|/lib64/ld-linux)' | sort -u | tr '\n' ' ')
 say "the runtime links: $runtime_libs"
+# Arch builds against the system's SDL3 instead of a static one, so the runtime links libSDL3 there
+extra_libs=
+if [ -r /etc/os-release ] && grep -qE '^(ID|ID_LIKE)=.*\barch\b' /etc/os-release; then
+    say "Arch Linux: allowing the runtime to link the system's SDL3"
+    extra_libs='libSDL3.so.*'
+fi
 for l in $runtime_libs; do
-    case "$l" in libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*) ;; *) die "the runtime links $l, which a player may not have" ;; esac
+    case "$l" in libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*) ;; $extra_libs) ;; *) die "the runtime links $l, which a player may not have" ;; esac
 done
 
 # the icon, a desktop entry the player can install, and the licenses
