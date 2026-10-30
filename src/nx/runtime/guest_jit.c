@@ -201,7 +201,11 @@ void jit_init(void) {
         if (variant_index_build())
             WARN("jit: out of memory, so the AOT pack cannot be looked up; the JIT handles every miss\n");
     } else {
+#ifdef SNX_IOS_AOT_ONLY
+        LOG("aot: no additional precompiled runtime code variants in this framework\n");
+#else
         WARN("jit: the AOT module has no runtime code variants; the JIT handles the misses and writes a cache\n");
+#endif
     }
 #ifdef SNX_IOS_AOT_ONLY
     snprintf(g_jit_error, sizeof(g_jit_error), "this iOS build runs signed, ahead-of-time game code only");

@@ -440,6 +440,15 @@ void fs_init(const char* keys, const char* title_keys) {
     LOG("startup: clearing temporary game storage\n");
     r = fs_tree_remove(&g_hle.fs.tree, NULL, "save/temp", 1, 1, 0);
     if (r != FS_TREE_OK && r != FS_TREE_NOTFOUND) WARN("fs: could not empty save/temp (error %d)\n", r);
+#ifdef SNX_IOS_AOT_ONLY
+    /* Read assets from the signed app; saves and temporary storage stay in
+       Documents. No multi-GB first-launch extraction is needed. */
+    static const char* const bundled[] = {"exefs", "romfs", "romfs.bin", "control.nacp", "icon.jpg", NULL};
+    const char* assets = inkypaint_ios_assets();
+    if (!assets[0] || !snx_is_dir(assets)) fatal("This iOS package is missing its bundled game assets");
+    r = fs_tree_overlay(&g_hle.fs.tree, assets, bundled, NULL);
+    if (r != FS_TREE_OK) fatal("Could not mount bundled game assets (error %d)", r);
+#endif
     LOG("startup: opening content overlays\n");
     overlays();
     LOG("startup: opening game dump\n");

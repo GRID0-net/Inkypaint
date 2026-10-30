@@ -35,13 +35,31 @@ on Ubuntu 22.04, which the release builds in so the package runs on glibc 2.35 a
 once into `.cache/linux/llvm`, and Qt comes from Qt's server, the same version as the Windows package's. The runtime
 links everything but glibc statically, so the copy a recompile puts beside the game runs on its own.
 
-To work on the UI, build it natively against any Qt 6.5 or later:
+For a Linux source build, build the runtime and launcher. The launcher is a
+separate CMake project; building only it does not compile `scarletnx`:
 
 ```sh
-cmake -S src/launcher-qt -B build/launcher-qt -G Ninja -DCMAKE_PREFIX_PATH=<Qt>/lib/cmake
-cmake --build build/launcher-qt
-INKYPAINT_RUNTIME=build/macos/scarletnx build/launcher-qt/inkypaint
+cmake --preset default
+cmake --build build/default --target scarletnx --parallel 2
+cmake -S src/launcher-qt -B build/launcher-qt -G Ninja \
+  -DINKYPAINT_RUNTIME_FILE="$PWD/build/default/scarletnx"
+cmake --build build/launcher-qt --parallel 2
+./build/launcher-qt/inkypaint
 ```
+
+The launcher's build stages the selected executable in `runtime/` beside it, and
+its install includes that executable too. Standard native build folders are
+detected automatically. Custom runtime locations can be supplied with
+`INKYPAINT_RUNTIME_FILE`; when running, `INKYPAINT_RUNTIME` overrides discovery:
+
+```sh
+INKYPAINT_RUNTIME="$PWD/build/default/scarletnx" ./build/launcher-qt/inkypaint
+```
+
+For UI work on a Mac, use the Mac runtime build path instead. Native launcher
+builds need Qt6.5 or later (`CMAKE_PREFIX_PATH` can select its installation).
+Source checkout runs also recognize a runtime beside the launcher or in the
+checkout's standard build folders. A runtime must be a file with execute permission.
 
 `INKYPAINT_PANE=online` opens a pane, and `INKYPAINT_SCREENSHOT=out.png` saves the window and quits.
 

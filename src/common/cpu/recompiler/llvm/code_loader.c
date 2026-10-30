@@ -403,6 +403,10 @@ SnxCodeLoader* snx_code_loader_new_toc(size_t reserve, SnxU64 toc, char* error, 
 
 static SnxCodeLoader* new_loader(size_t reserve, unsigned machine, uint64_t toc, int shared, char* error,
                                  size_t error_size) {
+#ifdef SNX_IOS_AOT_ONLY
+    snprintf(error, error_size, "runtime executable-memory loading is disabled in the signed iOS AOT build");
+    return NULL;
+#endif
     SnxCodeLoader* loader;
     size_t page = snx_vm_page_size();
     int i;

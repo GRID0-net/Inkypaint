@@ -6,5 +6,6 @@
 #include <SDL3/SDL.h>
 /* Main-thread poll. A disabled/unavailable device sensor leaves physical-pad
    motion untouched. No physical controller: phone motion supplies player 1. */
+void mobile_motion_suspend(void); /* main thread, on background/focus loss */
 void mobile_motion_sample(SDL_Window* window, int active, PadMotion* out);
 #endif

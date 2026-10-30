@@ -35,6 +35,7 @@ struct GamePaths {
 /// What the launcher carries beside itself (scripts/package-windows.sh puts it there): the runtime, runtime/scarletnx(.exe).
 /// INKYPAINT_RUNTIME points at a build instead, for a run from the build folder
 namespace Bundled {
+QString runtimeIn(const QString& applicationDirectory);
 QString runtime();
 bool isComplete();
 QProcessEnvironment environment(bool grid0Stdin = false);

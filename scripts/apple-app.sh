@@ -65,6 +65,9 @@ ios)
         mkdir -p "$app/Frameworks"
         cp -R "$found" "$app/Frameworks/"
     fi
+    if [ -n "${INKY_IOS_ASSETS:-}" ]; then
+        python3 "$src/scripts/stage-ios-assets.py" "$INKY_IOS_ASSETS" "$app/GameAssets"
+    fi
     plutil -lint "$app/Info.plist" >/dev/null
     rm -f "$out/ScarletNX.ipa"
     (cd "$work" && zip -qry "$out/ScarletNX.ipa" Payload)

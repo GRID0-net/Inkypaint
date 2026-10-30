@@ -26,6 +26,10 @@ void snx_save_before_exit(void);
 /* The game's folders, each ending in a separator (g_exedir may be empty), and its name: <g_exedir><g_exename>_code.so
    is its code, <g_exedir><g_exename>_data/ (g_datadir) its files */
 extern char g_datadir[1024], g_exename[256], g_exedir[1024];
+#ifdef SNX_IOS_AOT_ONLY
+/* Immutable assets in the signed bundle; save/config/cache roots remain writable. */
+const char* inkypaint_ios_assets(void);
+#endif
 /* the update of the game in its folder this program is: its title ID (0 for none, the game's own program) and its
    data folder, <g_exedir><g_exename>_data/, which lies over the game's. g_gamename is the game's name, g_exename's
    or the one the update is of, and g_datadir its data folder */

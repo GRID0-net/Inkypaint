@@ -1278,7 +1278,10 @@ void video_poll(void) {
             else if (e.type == SDL_EVENT_KEY_UP)
                 g_native_keys[e.key.scancode >> 6] &= ~bit;
         }
-        if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) memset(g_native_keys, 0, sizeof g_native_keys);
+        if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            memset(g_native_keys, 0, sizeof g_native_keys);
+            mobile_motion_suspend();
+        }
         if (e.type == SDL_EVENT_GAMEPAD_SENSOR_UPDATE) { /* every reading, for the frame's mean (gamepad_motion) */
             gamepad_sensor_event(e.gsensor.which, e.gsensor.sensor, e.gsensor.data);
             continue;
@@ -1287,6 +1290,7 @@ void video_poll(void) {
         if (aim_event(&e)) continue;
         if (overlay_event(&e)) continue;
         switch (e.type) {
+            case SDL_EVENT_WILL_ENTER_BACKGROUND: mobile_motion_suspend(); break;
             case SDL_EVENT_QUIT: g_quit = 1; break;
             case SDL_EVENT_WINDOW_MINIMIZED:
             case SDL_EVENT_WINDOW_OCCLUDED: __atomic_store_n(&g_minimized, 1, __ATOMIC_RELEASE); break;
@@ -1367,6 +1371,9 @@ void video_poll(void) {
     u64 pb;
     input_key_sticks(k, st);
     i32 lx = st[0], ly = st[1], rx = st[2], ry = st[3];
+    /* Opening CoreMotion sensors must not hold the HID lock through system work. */
+    PadMotion phone_motion = {0};
+    mobile_motion_sample(g_win, !gamepad_slot_id(0) && !g_hidden, &phone_motion);
     pm_lock(&g_hle.hid.input_lock);
     touch_lift();
     /* Each SDL slot is one guest Npad. Keyboard, scripted and on-screen input also drive No1. */
@@ -1403,7 +1410,7 @@ void video_poll(void) {
         player->rx = one_sticks[2];
         player->ry = one_sticks[3];
         gamepad_motion(i, player->motion);
-        if (i == 0) mobile_motion_sample(g_win, !connected && !g_hidden, &player->motion[0]);
+        if (i == 0 && phone_motion.valid) player->motion[0] = phone_motion;
         if (i == 0) { /* the mouse aims as player 1's controller turning (kbm.c) */
             static u64 last;
             u64 now = SDL_GetTicksNS();

@@ -17,6 +17,11 @@ static void close_sensors(void) {
     g_mobile_motion.initialized = g_mobile_motion.attempted = 0;
 }
 #endif
+void mobile_motion_suspend(void) {
+#ifdef SDL_PLATFORM_IOS
+    close_sensors();
+#endif
+}
 void mobile_motion_sample(SDL_Window* window, int active, PadMotion* out) {
 #ifdef SDL_PLATFORM_IOS
     if (!active || !window || !g_settings.device_motion) {

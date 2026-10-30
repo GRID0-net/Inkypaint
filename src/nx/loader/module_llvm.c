@@ -662,7 +662,9 @@ int snx_build_module_llvm(SnxProgram* loaded, const SnxCodegenOptions* options, 
             snx_error("packing failed: out of memory");
             goto done;
         }
-    } else if (snx_link(inputs, n, exports, export_count, base_name(build->output), &linked, error, sizeof(error))) {
+    } else if (snx_link(inputs, n, exports, export_count,
+                        build->native_library ? "@rpath/InkypaintGame.framework/InkypaintGame" : base_name(build->output),
+                        &linked, error, sizeof(error))) {
         snx_error("linking failed: %s", error);
         goto done;
     }

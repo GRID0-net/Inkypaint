@@ -38,14 +38,42 @@ bool GamePaths::isPrepared() const {
     return f.isFile() && f.isExecutable();
 }
 
-QString Bundled::runtime() {
-    QString env = qEnvironmentVariable("INKYPAINT_RUNTIME");
-    if (!env.isEmpty()) return env;
-    // in a folder of its own with only its DLLs: the recompile copies every DLL beside it into the game's folder,
-    // where Windows looks for them (snx_deploy_runtime), and the launcher's Qt has no business there
-    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("runtime/scarletnx") + exe);
+QString Bundled::runtimeIn(const QString& applicationDirectory) {
+    const QString env = qEnvironmentVariable("INKYPAINT_RUNTIME");
+    if (!env.isEmpty()) return QFileInfo(env).absoluteFilePath();
+    const QDir application(applicationDirectory);
+    const QString packaged = application.filePath(QStringLiteral("runtime/scarletnx") + exe);
+    if (QFileInfo::exists(packaged)) return packaged;
+    const QString beside = application.filePath(QStringLiteral("scarletnx") + exe);
+    if (QFileInfo::exists(beside)) return beside;
+    // Source builds have two CMake output directories. Recognize a checkout,
+    // then inspect its known runtime outputs rather than searching arbitrary files.
+    QDir parent(applicationDirectory);
+    for (int depth = 0; depth < 7; ++depth) {
+        if (QFileInfo::exists(parent.filePath(QStringLiteral("src/nx/CMakeLists.txt"))) &&
+            QFileInfo::exists(parent.filePath(QStringLiteral("src/launcher-qt/CMakeLists.txt")))) {
+#ifdef Q_OS_WIN
+            const QStringList builds = {QStringLiteral("build/windows"), QStringLiteral("build/default"), QStringLiteral("build")};
+#elif defined(Q_OS_MACOS)
+            const QStringList builds = {QStringLiteral("build/macos"), QStringLiteral("build/default"), QStringLiteral("build")};
+#else
+            const QStringList builds = {QStringLiteral("build/linux"), QStringLiteral("build/default"), QStringLiteral("build")};
+#endif
+            for (const QString& build : builds) {
+                const QString candidate = parent.filePath(build + QStringLiteral("/scarletnx") + exe);
+                if (QFileInfo::exists(candidate)) return candidate;
+            }
+            break;
+        }
+        if (!parent.cdUp()) break;
+    }
+    return packaged;
 }
-bool Bundled::isComplete() { return QFileInfo(runtime()).isExecutable(); }
+QString Bundled::runtime() { return runtimeIn(QCoreApplication::applicationDirPath()); }
+bool Bundled::isComplete() {
+    const QFileInfo file(runtime());
+    return file.isFile() && file.isExecutable();
+}
 QProcessEnvironment Bundled::environment(bool grid0Stdin) {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     if (grid0Stdin) env.insert(QStringLiteral("INKYPAINT_GRID0_STDIN"), QStringLiteral("1"));

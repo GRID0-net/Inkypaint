@@ -77,7 +77,13 @@ int Preparer::jobs() {
 void Preparer::start(const GameSources* sources, const GamePaths& paths) {
     if (running()) return;
     if (!Bundled::isComplete()) {
-        fail("This copy of inkypaint doesn't contain the runtime (scarletnx). Reinstall inkypaint.");
+        const QString path = Bundled::runtime();
+        if (QFileInfo(path).isFile())
+            fail("The runtime isn't executable: " + path + "\nCheck its file permissions.");
+        else
+            fail("The runtime (scarletnx) was not found at: " + path +
+                 "\nFor a source build, build scarletnx and set INKYPAINT_RUNTIME to its full path. "
+                 "For a downloaded package, reinstall the complete package.");
         return;
     }
     cancelled_ = false;

@@ -69,7 +69,8 @@ void gui_apple_stats(char* out, size_t size);
 
 char g_datadir[1024], g_exename[256], g_exedir[1024];
 #ifdef SNX_IOS_AOT_ONLY
-static char g_ios_bundle_code[2048];
+static char g_ios_bundle_code[2048], g_ios_bundle_assets[2048];
+const char* inkypaint_ios_assets(void) { return g_ios_bundle_assets; }
 #endif
 u64 g_addon;
 char g_addondir[1024], g_gamename[256];
@@ -843,6 +844,8 @@ int snx_main(int argc, char** argv) {
     snprintf(g_ios_bundle_code, sizeof g_ios_bundle_code, "%s", program_path(argv[0]));
     char* bundle_end = strrchr(g_ios_bundle_code, '/');
     if (!bundle_end) fatal("The iOS executable has no bundle path");
+    snprintf(g_ios_bundle_assets, sizeof g_ios_bundle_assets, "%.*s/GameAssets",
+             (int)(bundle_end - g_ios_bundle_code), g_ios_bundle_code);
     snprintf(bundle_end, sizeof g_ios_bundle_code - (size_t)(bundle_end - g_ios_bundle_code),
              "/Frameworks/InkypaintGame.framework/InkypaintGame");
 #endif

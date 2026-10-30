@@ -2,6 +2,10 @@
 <!-- Copyright 2026 the ScarletNX contributors -->
 # macOS and iOS
 
+For the inkypaint iPhone prototype and its default **signed, JIT-free AOT** path,
+see [inkypaint on iOS](IOS-INKYPAINT.md). The object-pack/JIT workflow below is the
+upstream optional on-device preparation path, not the new prototype's default.
+
 Both build on a Mac with Xcode, for Apple silicon (arm64), with Xcode's Clang, and the CI builds both on every push
 (`.github/workflows/build.yml`). They are new. On a Mac, one game's module loads and runs as far as its title
 background, without the logo or the menu. On an iPhone, one game has been prepared on the device and played with JIT on.

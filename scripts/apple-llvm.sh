@@ -62,5 +62,5 @@ cmake -S "$source/llvm" -B "$work/$system" -G Ninja -DCMAKE_OSX_ARCHITECTURES=ar
 cmake -S "$(dirname "$0")/llvm-libraries" -B "$work/$system-libraries" -DLLVM_BUILD="$work/$system" \
     -DOUTPUT="$work/$system-libraries.txt"
 cmake "$work/$system" -DLLVM_DISTRIBUTION_COMPONENTS="$(cat "$work/$system-libraries.txt");llvm-headers;cmake-exports"
-cmake --build "$work/$system" --parallel "$(getconf _NPROCESSORS_ONLN)" --target install-distribution
+cmake --build "$work/$system" --parallel "${INKY_JOBS:-2}" --target install-distribution
 echo "LLVM for $system in $prefix: configure ScarletNX with -DLLVM_DIR=$prefix/lib/cmake/llvm"

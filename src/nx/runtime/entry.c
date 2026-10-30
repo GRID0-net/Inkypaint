@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "common/utilities/setup.h"
+#include "common/utilities/common.h"
 #include "nx/runtime/driver/driver.h"
 #include "nx/runtime/driver/mcp.h"
 #include "nx/runtime/entry.h"
@@ -71,6 +72,10 @@ int snx_switch_main(int argc, char** argv) {
 #endif
 #if defined(SNX_MENU_THEN_GAME) && defined(SNX_IOS_AOT_ONLY)
     gui_apple_start();
+    if (snx_mkdirs("recompiled/0100C2500FC20000/0100C2500FC20000_data")) {
+        fprintf(stderr, "inkypaint: cannot create writable game storage in Documents\n");
+        return 1;
+    }
     if (argc == 1) {
         char* play[] = {argv[0], "--game=recompiled/0100C2500FC20000", NULL};
         return snx_main(2, play);
