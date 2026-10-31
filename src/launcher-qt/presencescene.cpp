@@ -108,7 +108,7 @@ DiscordIpc::Activity describe(const LauncherState& s) {
     DiscordIpc::Activity a;
     if (s.playing) {
         a.start = s.gameStart;
-        a.largeText = QStringLiteral("Splatoon 3 on Inkypaint");
+        a.largeText = QStringLiteral("Inkypaint");
         if (s.game.known) {
             SceneText t = describeScene(s.game.scene, s.game.content, s.game.rule, s.game.mode, s.game.stageId);
             a.details = t.details;
@@ -122,14 +122,13 @@ DiscordIpc::Activity describe(const LauncherState& s) {
             a.details = QStringLiteral("Playing Splatoon 3");
         }
         if (s.online) { // the second line has room: its own words when empty, else added to the scene's
-            a.largeText = QStringLiteral("Splatoon 3 on Inkypaint, online with GRID0+");
             a.state = a.state.isEmpty() ? QStringLiteral("Online with GRID0+")
                                         : a.state + QStringLiteral(" \u00b7 GRID0+");
         }
         return a;
     }
     a.start = s.launcherStart;
-    a.largeText = QStringLiteral("inkypaint");
+    a.largeText = QStringLiteral("Inkypaint");
     if (s.phase == "extracting" || s.phase == "recompiling" || s.phase == "installingDlc") {
         a.details = QStringLiteral("Setting up the game");
         if (s.phase == "extracting") a.state = QStringLiteral("Extracting the game");

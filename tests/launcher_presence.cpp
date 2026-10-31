@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
     CHECK(QJsonDocument::fromJson(payload).object().value("client_id").toString() == "1234567890");
 
     // the activity
-    DiscordIpc::Activity a{"In a battle", "Splat Zones on Mahi-Mahi Resort", "Splatoon 3 on Inkypaint", "battle", "Battle", 1793404800};
+    DiscordIpc::Activity a{"In a battle", "Splat Zones on Mahi-Mahi Resort", "Inkypaint", "battle", "Battle", 1793404800};
     QJsonObject set = QJsonDocument::fromJson(DiscordIpc::setActivity(42, &a, "n1")).object();
     CHECK(set.value("cmd").toString() == "SET_ACTIVITY" && set.value("nonce").toString() == "n1");
     QJsonObject args = set.value("args").toObject(), act = args.value("activity").toObject();
@@ -84,13 +84,13 @@ int main(int argc, char** argv) {
     CHECK(l.details == "Starting Splatoon 3" && l.start == 1090);
     s.game = g;
     l = Presence::describe(s);
-    CHECK(l.details == "Playing Salmon Run" && l.largeText == "Splatoon 3 on Inkypaint");
+    CHECK(l.details == "Playing Salmon Run" && l.largeText == "Inkypaint");
     // online with GRID0+: the second line says so, added to the scene's or on its own when it has none
     QString offline = l.state;
     s.online = true;
     l = Presence::describe(s);
     CHECK(l.details == "Playing Salmon Run" && l.state == offline + QString::fromUtf8(" \u00b7 GRID0+"));
-    CHECK(l.largeText == "Splatoon 3 on Inkypaint, online with GRID0+");
+    CHECK(l.largeText == "Inkypaint");
     Presence::GameStatus plaza;
     plaza.known = true;
     plaza.scene = "Plaza";
