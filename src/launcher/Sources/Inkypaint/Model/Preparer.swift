@@ -46,7 +46,7 @@ struct GameSources: Equatable {
 @MainActor
 final class Preparer {
     enum Phase: Equatable {
-        case idle, extracting, recompiling, done
+        case idle, extracting, recompiling, installingDlc, done
         case failed(String)
     }
 
@@ -58,8 +58,11 @@ final class Preparer {
     private(set) var started: Date?
     private var process: Process?
     private var cancelled = false
+    private(set) var installingDlc = false
+    private var dlcArgs: [String] = []
+    private var dlcPaths: GamePaths?
 
-    var isRunning: Bool { phase == .extracting || phase == .recompiling }
+    var isRunning: Bool { phase == .extracting || phase == .recompiling || phase == .installingDlc }
     /// The whole job: extraction is the first quarter, the recompile the rest (on an M2 it takes about 30 minutes).
     var fraction: Double { 0.25 * extractFraction + 0.75 * compileFraction }
 
@@ -78,6 +81,7 @@ final class Preparer {
             return
         }
         cancelled = false
+        installingDlc = false
         log = []
         started = Date()
         extractFraction = 0
@@ -91,7 +95,46 @@ final class Preparer {
     }
 
     func reset() {
-        if !isRunning { phase = .idle }
+        if !isRunning { phase = .idle; installingDlc = false }
+    }
+
+    func installDlc(_ file: URL, sources: GameSources, paths: GamePaths) {
+        guard !isRunning else { return }
+        installingDlc = true
+        dlcArgs = []
+        guard paths.isPrepared, Bundled.runtime != nil else {
+            phase = .failed("Prepare the base game and install the runtime first.")
+            return
+        }
+        dlcPaths = paths
+        dlcArgs = ["--data", paths.data.path, "--install-dlc", file.path, "--outdir", paths.recompiled.path]
+        if let keys = sources.prodKeys { dlcArgs += ["--keys", keys.path] }
+        if let keys = sources.titleKeys { dlcArgs += ["--title-keys", keys.path] }
+        retryDlc()
+    }
+
+    func retryDlc() {
+        guard !isRunning, !dlcArgs.isEmpty, let paths = dlcPaths, let runtime = Bundled.runtime else { return }
+        cancelled = false
+        log = []
+        started = Date()
+        extractFraction = 0
+        compileFraction = 0
+        phase = .installingDlc
+        detail = "Installing optional DLC; the base game is kept"
+        let args = dlcArgs
+        Task {
+            do {
+                try await execute(runtime, args)
+                extractFraction = 1
+                compileFraction = 1
+                phase = paths.isPrepared ? .done : .failed("The base game is no longer available.")
+                detail = "DLC installed"
+            } catch {
+                phase = .failed(cancelled ? "DLC installation stopped." : error.localizedDescription)
+            }
+            process = nil
+        }
     }
 
     private func run(runtime: URL, sources: GameSources, paths: GamePaths) async {

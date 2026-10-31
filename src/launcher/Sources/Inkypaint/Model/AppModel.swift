@@ -160,7 +160,7 @@ final class AppModel {
     // MARK: playing
 
     func play() {
-        guard running == nil, isPrepared else { return }
+        guard running == nil, isPrepared, !preparer.isRunning else { return }
         lastExit = nil
         do {
             try deployRuntime()

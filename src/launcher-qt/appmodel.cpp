@@ -85,6 +85,11 @@ void AppModel::refresh() {
 }
 
 void AppModel::prepare() { preparer_.start(&sources_, paths_); }
+
+void AppModel::installDlc(const QString& file) {
+    if (playing() || setupStep_ != "idle") return;
+    preparer_.installDlc(file, &sources_, paths_);
+}
 void AppModel::recompile() {
     setPane("files");
     preparer_.reset();
@@ -169,7 +174,7 @@ bool AppModel::deployRuntime(QString* error) {
 }
 
 void AppModel::play() {
-    if (game_ || !prepared()) return;
+    if (game_ || !prepared() || preparer_.running()) return;
     lastExit_.clear();
     QString why;
     if (!deployRuntime(&why)) {

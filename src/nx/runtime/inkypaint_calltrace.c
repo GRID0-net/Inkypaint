@@ -38,10 +38,26 @@ static struct {
     PMutex lock;
     u64 start_ns, end_ns;
     int state; /* 0 waiting, 1 counting, 2 reported */
+    int by_object; /* distinguish individual scene objects in a narrow census */
     u64 lost;
 } g_trace = {.lock = PMUTEX_INIT};
 
 static u32 slot_of(u64 pc) { return (u32)((pc * 0x9e3779b97f4a7c15ull) >> 32) & g_trace.fn_mask; }
+/* Restrict diagnostics to a subsystem without allocating/wrapping the entire
+   game's dispatch table. Ranges use the direct-call option's hexadecimal form. */
+static int selected(u64 pc, const char* ranges) {
+    if (!ranges || !*ranges) return 1;
+    while (*ranges) {
+        char* end;
+        u64 lo = strtoull(ranges, &end, 16), hi = lo + 4;
+        if (end == ranges) return 0;
+        if (*end == '-') hi = strtoull(end + 1, &end, 16);
+        if (pc >= lo && pc < hi) return 1;
+        if (*end != ',') break;
+        ranges = end + 1;
+    }
+    return 0;
+}
 static GuestFn original(u64 pc) {
     for (u32 i = slot_of(pc), n = 0; n <= g_trace.fn_mask; n++, i = (i + 1) & g_trace.fn_mask) {
         if (g_trace.fns[i].pc == pc) return g_trace.fns[i].fn;
@@ -99,6 +115,7 @@ static void wrapper(CPU* c, u64 entry) {
             } else {
                 u64 caller = c->x[30], phase = (u64)inkypaint_framerate_phase(), vt = readable(c->x[0], 8) ? gr64(c->x[0]) : 0;
                 if (vt < g_code_lo || vt >= AS_SIZE) vt = 0;
+                if (g_trace.by_object) vt = c->x[0];
                 u64 h = (caller * 0x9e3779b97f4a7c15ull) ^ (entry * 0xc2b2ae3d27d4eb4full) ^ (vt * 0x165667b19e3779f9ull) ^ phase;
                 u32 i = (u32)(h >> 40) & (EDGE_SLOTS - 1), k;
                 for (k = 0; k < 64; k++, i = (i + 1) & (EDGE_SLOTS - 1)) {
@@ -148,10 +165,12 @@ static u64 recompile_range(u64 lo, u64 hi) {
 void inkypaint_calltrace_init(void) {
     const char* at = getenv("INKYPAINT_CALL_TRACE");
     const char* direct = getenv("INKYPAINT_CALL_TRACE_DIRECT");
+    const char* ranges = getenv("INKYPAINT_CALL_TRACE_RANGE");
     u64 slots = (g_code_hi - g_code_lo) / 4, wrapped = 0, recompiled = 0;
     if (!at || !*at || inkypaint_any_title() || g_hle.kernel.title_id != INKYPAINT_TITLE_ID) return;
+    g_trace.by_object = getenv("INKYPAINT_CALL_TRACE_OBJECTS") != NULL;
     g_trace.edges = calloc(EDGE_SLOTS, sizeof *g_trace.edges);
-    if (!g_trace.fns || !g_trace.edges) fatal("calltrace: out of memory");
+    if (!g_trace.edges) fatal("calltrace: out of memory");
     g_trace.start_ns = strtoull(at, NULL, 10) * 1000000000ull;
     while (direct && *direct) {
         char* end;
@@ -161,14 +180,14 @@ void inkypaint_calltrace_init(void) {
         direct = *end == ',' ? end + 1 : NULL;
     }
     u64 count = 0, size = 1;
-    for (u64 i = 0; i < slots; i++) count += g_disp[i] != NULL;
+    for (u64 i = 0; i < slots; i++) count += g_disp[i] != NULL && selected(g_code_lo + i * 4, ranges);
     while (size < count * 2) size <<= 1;
     g_trace.fn_mask = (u32)(size - 1);
     g_trace.fns = calloc((size_t)size, sizeof *g_trace.fns);
     if (!g_trace.fns) fatal("calltrace: out of memory");
     for (u64 i = 0; i < slots; i++) {
         GuestFn fn = g_disp[i];
-        if (!fn) continue;
+        if (!fn || !selected(g_code_lo + i * 4, ranges)) continue;
         u64 pc = g_code_lo + i * 4;
         u32 s = slot_of(pc);
         while (g_trace.fns[s].pc) s = (s + 1) & g_trace.fn_mask;

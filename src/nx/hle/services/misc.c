@@ -787,8 +787,14 @@ static void aoc_scan(void) {
     pm_lock(&g_hle.misc.aoc_lock);
     if (!g_hle.misc.aoc_scanned) {
         for (i = 1; i <= AOC_MAX; i++) {
-            snprintf(path, sizeof path, "system/archives/%016llx.romfs", (unsigned long long)(base + (u64)i));
+            /* Extracted add-ons use snx_title_text's uppercase spelling. The
+               file index is case-sensitive even on case-insensitive hosts. */
+            snprintf(path, sizeof path, "system/archives/%016llX.romfs", (unsigned long long)(base + (u64)i));
             f = fs_aoc_has(base + (u64)i) ? NULL : fs_open_read(path, NULL);
+            if (!f && !fs_aoc_has(base + (u64)i)) {
+                snprintf(path, sizeof path, "system/archives/%016llx.romfs", (unsigned long long)(base + (u64)i));
+                f = fs_open_read(path, NULL); /* older, manually installed archives */
+            }
             if (!f && !fs_aoc_has(base + (u64)i)) continue;
             if (f) fclose(f);
             g_hle.misc.aoc_index[g_hle.misc.aoc_count++] = i;

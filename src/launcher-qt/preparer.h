@@ -40,6 +40,7 @@ class Preparer : public QObject {
     Q_PROPERTY(QStringList log READ log NOTIFY logChanged)
     Q_PROPERTY(bool running READ running NOTIFY changed)
     Q_PROPERTY(QString started READ started NOTIFY changed)
+    Q_PROPERTY(bool installingDlc READ installingDlc NOTIFY changed)
 public:
     explicit Preparer(QObject* parent = nullptr);
     QString phase() const { return phase_; }
@@ -47,12 +48,15 @@ public:
     double fraction() const { return 0.25 * extract_ + 0.75 * compile_; } // the recompile is most of it
     QString detail() const { return detail_; }
     QStringList log() const { return log_; }
-    bool running() const { return phase_ == "extracting" || phase_ == "recompiling"; }
+    bool running() const { return phase_ == "extracting" || phase_ == "recompiling" || phase_ == "installingDlc"; }
+    bool installingDlc() const { return dlc_; }
     QString started() const;
     /// Parallel compiles: two with 8 GB or less, which otherwise swaps; more with more memory
     static int jobs();
 
     void start(const GameSources* sources, const GamePaths& paths);
+    void installDlc(const QString& file, const GameSources* sources, const GamePaths& paths);
+    Q_INVOKABLE void retryDlc();
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void reset();
 
@@ -76,6 +80,7 @@ private:
     QProcess* process_ = nullptr;
     QString partial_;
     bool cancelled_ = false;
+    bool dlc_ = false;
     GamePaths paths_;
     QStringList extractArgs_;
 };

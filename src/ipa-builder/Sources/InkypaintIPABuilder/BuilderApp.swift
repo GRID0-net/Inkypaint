@@ -59,6 +59,9 @@ struct BuilderView: View {
                 }
                 Text("Reuses your installed game files and compiles iOS code. Includes game assets in the IPA; signing is separate.")
                     .font(.callout).foregroundStyle(.secondary)
+                Toggle("Include installed DLC (optional, untested)", isOn: $model.includeDlc)
+                Text("Install and extract DLC with the desktop launcher first. Leave this off for the base game only.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .disabled(model.busy)
             HStack {

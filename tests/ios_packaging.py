@@ -38,6 +38,25 @@ class Packaging(unittest.TestCase):
                          ["exefs/main.npdm", "romfs/fixture.bin"])
         self.assertTrue((self.source / "save/user/private").exists())
 
+    def test_optional_dlc(self):
+        game, dlc = "0100C2500FC20000", "0100C2500FC21001"
+        install = self.root / "installed" / (game + "_data")
+        install.mkdir(parents=True)
+        (install.parent / (game + ".ini")).write_text("addons=0100C2500FC20800v2752512," + dlc + "\n")
+        image = install.parent / f"{game}_{dlc}_data/system/archives/{dlc}.romfs"
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"synthetic DLC")
+        dst = self.root / "stage"
+        assets.stage(self.source, dst)
+        self.assertFalse((dst / "dlc.ini").exists())
+        assets.stage(self.source, dst, install)
+        self.assertEqual((dst / "dlc.ini").read_text(), "addons=" + dlc + "\n")
+        self.assertEqual((dst / f"system/archives/{dlc}.romfs").read_bytes(), b"synthetic DLC")
+        image.unlink()
+        with self.assertRaisesRegex(ValueError, "Extract this DLC"):
+            assets.stage(self.source, dst, install)
+        self.assertTrue((dst / "dlc.ini").is_file())
+
     def test_rejects_symlink_before_replacing_staging(self):
         dst = self.root / "stage"
         dst.mkdir()

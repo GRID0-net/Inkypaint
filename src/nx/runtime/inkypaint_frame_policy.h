@@ -4,12 +4,14 @@
 #define INKYPAINT_FRAME_POLICY_H
 #include <stdint.h>
 #include <string.h>
+/* 60 is an intentional cap, not an unset value. Unlimited/invalid settings
+   use 120 for smooth motion; the fixed simulation clock remains 60 either way. */
+static inline int inkypaint_frame_render_cap(int configured_hz) {
+    return configured_hz >= 60 && configured_hz <= 240 ? configured_hz : 120;
+}
 /* A render-only frame must not consume controller edges or advance UI state.
    Unknown callbacks are simulation, including delegates in the post-calc graph.
    Only identified graphics maintenance may run without a fixed simulation step. */
-static inline int inkypaint_frame_replay_candidate(uint64_t model_frame, uint64_t frame) {
-    return model_frame <= frame && frame - model_frame <= 1;
-}
 static inline int inkypaint_frame_simulation_job(uint32_t role, const char* name, uint64_t executor) {
     (void)role;
     /* GSYS render tasks and GameGfx's graphics delegates can have no name. */
