@@ -39,6 +39,18 @@ int main(void) {
     memcpy(bad,a,sizeof bad); bad[0]=NAN; assert(!inkypaint_camera_blend(out,a,bad,.5f));
     memcpy(bad,a,sizeof bad); bad[0]=2; assert(!inkypaint_camera_blend(out,a,bad,.5f));
     assert(!inkypaint_camera_blend(out,a,b,NAN));
+    /* a camera cut shows the new pose: far away, or turned past 45 degrees, in one step; a quick pan still blends */
+    {
+        const float pan[12]={.9063078f,-.4226183f,0,3, .4226183f,.9063078f,0,1, 0,0,1,0}; /* 25 degrees, 3.2 units */
+        const float turn[12]={.5f,-.8660254f,0,0, .8660254f,.5f,0,0, 0,0,1,0};              /* 60 degrees, in place */
+        float far[12]; memcpy(far,a,sizeof far); far[3]=17;
+        assert(!inkypaint_camera_cut(a,a));
+        assert(!inkypaint_camera_cut(a,pan));
+        assert(inkypaint_camera_cut(a,turn));
+        assert(inkypaint_camera_cut(a,far));
+        assert(inkypaint_camera_cut(a,b));
+        far[3]=NAN; assert(inkypaint_camera_cut(a,far));
+    }
     puts("camera interpolation: rigid rotation, position, inverse and history rejection passed");
     return 0;
 }

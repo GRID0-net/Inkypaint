@@ -265,8 +265,8 @@ int main(void) {
     ctx.c[0] = (IpcBuf){OUT1, 16, 0};
     CHECK(call(&e) == 0 && word(2) == 16 && GP(OUT1)[1] == 2 && !memcmp(GP(OUT1) + 2, &port, 2));
 
-    /* a command bsd doesn't have (RecvMMsg): success, with the BSD result -1 and EOPNOTSUPP in the raw data */
-    request(29, (u32)s, 0, 0);
+    /* a command bsd doesn't have (28, which no interface declares): success, with the BSD result -1 and EOPNOTSUPP in the raw data */
+    request(28, (u32)s, 0, 0);
     CHECK(call(&e) == -1 && e == SNX_EOPNOTSUPP);
     request(100, 0, 0, 0);
     CHECK(bsd->dispatch(bsd, &ctx) == 0 && ctx.out_size == 8 && word(0) == 0xFFFFFFFFu && word(1) == SNX_EOPNOTSUPP);

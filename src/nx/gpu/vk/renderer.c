@@ -504,7 +504,13 @@ static void show(Surf* src, u32 fw, u32 fh, u32 transform, int game) {
             SNX_PLOT("pipeline wait ms", (double)(is[3] - was[3]));
             SNX_PLOT("texture uploads", is[7] - was[7]);
             was_drawn = g_vk_drawn;
-            if (d > 50000000) {
+            static u64 slow_ns;
+            if (!slow_ns) { /* INKYPAINT_SLOW_FRAME_MS lowers the 50 ms that count as slow, to find the smaller hitches */
+                const char* env = getenv("INKYPAINT_SLOW_FRAME_MS");
+                unsigned long ms = env ? strtoul(env, NULL, 10) : 0;
+                slow_ns = (ms >= 5 && ms <= 1000 ? ms : 50) * 1000000ull;
+            }
+            if (d > slow_ns) {
                 slow_frames++;
                 LOG_LIMIT(200,
                           "vulkan: a %llu ms frame: %llu shaders translated (%llu ms), %llu pipelines made (%llu ms waited "

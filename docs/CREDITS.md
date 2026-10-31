@@ -84,6 +84,11 @@ ported from them.
 AppImages with its quick-sharun, its Arch images and its debloated packages, and is the reference for how they are
 packaged ([FAQ](https://github.com/pkgforge-dev/Anylinux-AppImages/blob/main/FAQ.md)).
 
+The 60 FPS plaza fix (clearing the hall's 30 FPS flag, `inkypaint_framerate.c`) follows the patch sites that Coxxs and
+theboy181 documented in their public Splatoon 3 60 FPS patch for 11.3.0
+([public-pchtxt](https://github.com/Coxxs/public-pchtxt)). That repository states no license, so no text or code of it
+is copied. The addresses were checked against the game's own disassembly.
+
 Installed license texts: `share/licenses/scarletnx/`. AppImage system-library licenses
 and package manifest: `share/licenses/`. Component license files contain the full terms.
 

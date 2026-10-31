@@ -99,13 +99,13 @@ int main(int argc, char** argv) {
            gui_settings_set(&s, "aot_threads", "4"));
     assert(gui_settings_recompile(&s, options) == 2 && !strcmp(options[0], "--opt=s") &&
            !strcmp(options[1], "--aot_threads=4"));
-    assert(!strcmp(s.keys[opt + 2].section, "Launch") && !strcmp(s.keys[opt + 2].key, "Unit cache limit") &&
-           !strcmp(s.values[opt + 2].key, "unit_cache_gb") && strstr(s.keys[opt + 2].about, "0 = no limit"));
-    assert(!strcmp(s.values[opt + 2].def, "0") && strstr(s.keys[opt + 2].about, "a tenth of its disk free")); /* no limit */
+    assert(!strcmp(s.keys[opt + 4].section, "Launch") && !strcmp(s.keys[opt + 4].key, "Unit cache limit") &&
+           !strcmp(s.values[opt + 4].key, "unit_cache_gb") && strstr(s.keys[opt + 4].about, "0 = no limit"));
+    assert(!strcmp(s.values[opt + 4].def, "0") && strstr(s.keys[opt + 4].about, "a tenth of its disk free")); /* no limit */
     assert(gui_settings_set(&s, "unit_cache_gb", "50") && gui_settings_recompile(&s, options) == 3 &&
            !strcmp(options[2], "--unit_cache_gb=50") && gui_settings_set(&s, "unit_cache_gb", ""));
-    assert(!strcmp(s.keys[opt + 3].section, "Launch") && s.values[opt + 3].kind == GUI_SETTING_PAGE &&
-           !strcmp(s.keys[opt + 3].key, "LLVM Internals"));
+    assert(!strcmp(s.keys[opt + 5].section, "Launch") && s.values[opt + 5].kind == GUI_SETTING_PAGE &&
+           !strcmp(s.keys[opt + 5].key, "LLVM Internals"));
     assert(gui_settings_set(&s, "opt", ".ini") && gui_settings_set(&s, "aot_threads", "") &&
            !gui_settings_recompile(&s, options));
     /* a game's setting alone, as R's recompile takes Debug's SLP vectorizer: once picked, and never a launcher's own */

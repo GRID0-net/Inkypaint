@@ -204,7 +204,7 @@ if(TARGET hactool_internals)
     target_compile_options(snx-test-fs-service PRIVATE -Wno-unused-parameter)
     snx_swipc(snx-test-fs-service ROOT "${PROJECT_SOURCE_DIR}/src/nx" FILES hle/services/types.swipc hle/filesystem/fs.swipc)
     # fs.c reads a game's dump in place through the driver's container.c and hactool
-    target_sources(snx-test-fs-service PRIVATE "${PROJECT_SOURCE_DIR}/src/nx/runtime/driver/container.c")
+    target_sources(snx-test-fs-service PRIVATE "${PROJECT_SOURCE_DIR}/src/nx/runtime/driver/container.c" support/heapscale_stub.c)
     target_link_libraries(snx-test-fs-service PRIVATE scarletnx-common hactool_internals)
     add_test(NAME filesystem_raw COMMAND snx-test-fs-fixture $<TARGET_FILE:snx-test-fs-service> raw)
     add_test(NAME filesystem_addon_overlay COMMAND snx-test-fs-fixture $<TARGET_FILE:snx-test-fs-service> addon-overlay)

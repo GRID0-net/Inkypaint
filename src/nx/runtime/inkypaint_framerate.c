@@ -99,7 +99,7 @@ static struct {
     u64 frame_serial, camera_calls, camera_blends, camera_changes, camera_inputs;
     u64 sampled_frames, logic_steps, extra_frames, discarded_steps;
     u64 report_ns;
-    int target, trace, simulating, camera_enabled;
+    int target, trace, simulating, camera_enabled, plaza60;
     /* bisection switches for the plaza's horizontal line (environment, see inkypaint_framerate_init) */
     int keep_alternation, no_gate, no_gfx_hold;
     char allow[1024]; /* INKYPAINT_GATE_ALLOW: ",name,name," of gated jobs that run on every frame anyway ("*": all) */
@@ -410,7 +410,24 @@ static void scene_reset(CPU* c, u64 entry) {
         c->x[1] = 1;
     g_framerate.scene_reset(c, entry);
 }
+/* The plaza is a 30 FPS scene of the game: bit 0 of the GSys flags word at [[0xdf288e0]]+0x458 is what it sets (at 0x959f10c
+   and 0xba5bf04, `orr w9, w10, w9`) to split the actors' work over two alternating frames, and smooth motion's frame logic
+   does not follow that split: the other players never appeared and the squids stood still, their hitboxes moving. Coxxs's
+   60 FPS patch for 11.3.0 stops the two instructions from setting it. Cleared here before each calc instead, which runs
+   the plaza as the hall (INKYPAINT_PLAZA60=0 leaves it to the game). */
+static void plaza60_clear(void) {
+    static int said;
+    u64 slot = readable(0xdf288e0ull, 8) ? gr64(0xdf288e0ull) : 0;
+    u64 object = slot && readable(slot, 8) ? gr64(slot) : 0;
+    u32 flags;
+    if (!object || !readable(object + 0x458, 4)) return;
+    flags = gr32(object + 0x458);
+    if (!(flags & 1)) return;
+    gw32(object + 0x458, flags & ~1u);
+    if (!said++) LOG("framerate: the game's 30 FPS scene flag is cleared each frame, the plaza runs at 60 as the hall does\n");
+}
 static void module_calc(CPU* c, u64 entry) {
+    if (g_framerate.plaza60) plaza60_clear();
     pm_lock(&g_framerate.lock);
     g_framerate.module = c->x[0];
     if (g_framerate.target && !g_framerate.no_gate) {
@@ -470,7 +487,8 @@ static int camera_sample(u64 object, u32 index, u64 projection, u64 source, floa
     }
     camera->frame = now_frame;
     camera->projection_hash = hash;
-    int blend = camera->history && inkypaint_camera_blend(interpolated, camera->previous, camera->current, sample.alpha);
+    int blend = camera->history && !inkypaint_camera_cut(camera->previous, camera->current) &&
+                inkypaint_camera_blend(interpolated, camera->previous, camera->current, sample.alpha);
     if (blend) g_framerate.camera_blends++;
     pm_unlock(&g_framerate.lock);
     if (blend) inkypaint_camera_inverse(result, interpolated);
@@ -777,6 +795,7 @@ void inkypaint_framerate_init(void) {
        INKYPAINT_NO_GFX_HOLD=1 lets GameGfx's visual-time counter advance on every frame */
     g_framerate.keep_alternation = getenv("INKYPAINT_KEEP_ALTERNATION") && !strcmp(getenv("INKYPAINT_KEEP_ALTERNATION"), "1");
     g_framerate.no_gate = getenv("INKYPAINT_NO_GATE") && !strcmp(getenv("INKYPAINT_NO_GATE"), "1");
+    g_framerate.plaza60 = !(getenv("INKYPAINT_PLAZA60") && !strcmp(getenv("INKYPAINT_PLAZA60"), "0"));
     g_framerate.no_gfx_hold = getenv("INKYPAINT_NO_GFX_HOLD") && !strcmp(getenv("INKYPAINT_NO_GFX_HOLD"), "1");
     {
         const char* allow = getenv("INKYPAINT_GATE_ALLOW");

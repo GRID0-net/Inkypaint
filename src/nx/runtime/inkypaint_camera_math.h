@@ -41,6 +41,17 @@ static inline void inkypaint_camera_inverse(float out[12], const float pose[12])
         out[4*i+3] = -(out[4*i]*pose[3] + out[4*i+1]*pose[7] + out[4*i+2]*pose[11]);
     }
 }
+/* A camera cut: the pose changed by more than 14 units, or turned by more than 45 degrees, between two steps. The game
+   switches views (a scene's camera, a menu's) in one step, and a blend across it is a made-up in-between view shown for
+   one presented frame (in the plaza one of them looked at the tower screen: a one-frame flash of its colours). A cut shows
+   the new pose at once. Both poses are row-major 3x4 matrices. */
+static inline int inkypaint_camera_cut(const float prev[12], const float curr[12]) {
+    float dist = 0, trace = 0;
+    for (unsigned i = 3; i < 12; i += 4) dist += (curr[i] - prev[i]) * (curr[i] - prev[i]);
+    for (unsigned i = 0; i < 3; i++)
+        for (unsigned j = 0; j < 3; j++) trace += prev[4*i+j] * curr[4*i+j];
+    return !isfinite(dist) || !isfinite(trace) || dist > 196.f || (trace - 1.f) * .5f < .70710678f;
+}
 static inline int inkypaint_camera_blend(float out[12], const float prev[12], const float curr[12], float alpha) {
     float p[4], q[4];
     if (!isfinite(alpha) || alpha < 0 || alpha > 1 || !inkypaint_camera_rotation(prev,p) ||
