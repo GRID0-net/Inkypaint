@@ -487,7 +487,8 @@ static int camera_sample(u64 object, u32 index, u64 projection, u64 source, floa
     }
     camera->frame = now_frame;
     camera->projection_hash = hash;
-    int blend = camera->history && inkypaint_camera_blend(interpolated, camera->previous, camera->current, sample.alpha);
+    int blend = camera->history && !inkypaint_camera_cut(camera->previous, camera->current) &&
+                inkypaint_camera_blend(interpolated, camera->previous, camera->current, sample.alpha);
     if (blend) g_framerate.camera_blends++;
     pm_unlock(&g_framerate.lock);
     if (blend) inkypaint_camera_inverse(result, interpolated);
