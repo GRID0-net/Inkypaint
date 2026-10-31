@@ -117,6 +117,10 @@ enum SettingsCatalog {
         SettingGroup(title: "Controls", symbol: "gamecontroller", settings: [
             SettingDef(key: "keyboard_mouse_enabled", section: "Keyboard and mouse", title: "Keyboard and mouse input",
                        detail: "Controller activity takes priority. Keyboard and mouse resume after the controller is idle.", kind: .toggle, defaultValue: "1"),
+            SettingDef(key: "native_mouse_camera", section: "Keyboard and mouse", title: "Experimental mouse camera",
+                       detail: "The mouse turns the camera directly, like a PC game, and the game's motion controls are not "
+                           + "needed. Turn it off to use the regular mouse aim below, which works like motion controls.",
+                       kind: .toggle, defaultValue: "0"),
             SettingDef(key: "gamepad_menu_layout", section: "Controllers", title: "Xbox/PlayStation layout in menus",
                        detail: "Bottom button confirms in menus and activates visible A-button interaction prompts. Gameplay restores its own layout when the prompt disappears. Prompts keep Nintendo labels.", kind: .toggle, defaultValue: "0"),
         ]),
@@ -132,13 +136,10 @@ enum SettingsCatalog {
         ]),
         SettingGroup(title: "Keyboard and mouse", symbol: "keyboard", settings: [
             SettingDef(key: "mouse_aim", section: "Keyboard and mouse", title: "Mouse aim",
-                       detail: "Click in the game's window and the mouse aims the way motion controls do (turn the "
-                           + "game's motion controls on). Left Option lets the mouse go, and the game's menu does too.",
+                       detail: "The regular way to aim with the mouse: click in the game's window and it aims the way "
+                           + "motion controls do (turn the game's motion controls on). Left Option lets the mouse go, "
+                           + "and the game's menu does too. The experimental mouse camera replaces this while it is on.",
                        kind: .toggle, defaultValue: "1"),
-            SettingDef(key: "native_mouse_camera", section: "Keyboard and mouse", title: "Native mouse camera",
-                       detail: "The mouse turns the camera directly, like a PC game, with no need for the game's "
-                           + "motion controls. When it is off, the original controller camera runs.",
-                       kind: .toggle, defaultValue: "0"),
             SettingDef(key: "mouse_sensitivity", section: "Keyboard and mouse", title: "Mouse sensitivity",
                        detail: "How far the mouse turns the aim. The game's own motion sensitivity applies on top.",
                        kind: .choice([("25", "25%"), ("50", "50%"), ("75", "75%"), ("100", "100%"), ("125", "125%"),
