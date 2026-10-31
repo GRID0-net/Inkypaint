@@ -16,7 +16,12 @@ qt_standard_project_setup(REQUIRES 6.5)
 qt_add_executable(inkypaint WIN32
     main.cpp launchersettings.cpp launchersettings.h game.cpp game.h inifile.cpp inifile.h gamesettings.cpp gamesettings.h preparer.cpp preparer.h
     grid0.cpp grid0.h grid0patches.cpp grid0patches.h onlinemodel.cpp onlinemodel.h keynames.cpp keynames.h modfiles.cpp modfiles.h modsmodel.cpp modsmodel.h
-    appmodel.cpp appmodel.h)
+    appmodel.cpp appmodel.h discordipc.h discordpresence.cpp discordpresence.h presencescene.cpp presencescene.h
+    presencemodel.cpp presencemodel.h)
+# Discord's rich presence: the application's ID from discord.com/developers (empty, the feature does nothing). The
+# environment's INKYPAINT_DISCORD_APP_ID overrides it at run time
+set(INKYPAINT_DISCORD_APP_ID "" CACHE STRING "Discord application ID for the launcher's rich presence (empty: off)")
+target_compile_definitions(inkypaint PRIVATE INKYPAINT_DISCORD_APP_ID="${INKYPAINT_DISCORD_APP_ID}")
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(inkypaint
     URI Inkypaint
@@ -84,6 +89,13 @@ if(BUILD_TESTING)
     target_include_directories(inkypaint-test-mod-paths PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(inkypaint-test-mod-paths PRIVATE Qt6::Core)
     add_test(NAME launcher_mod_paths COMMAND inkypaint-test-mod-paths)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(inkypaint-test-presence EXCLUDE_FROM_ALL ../../tests/launcher_presence.cpp presencescene.cpp)
+    target_include_directories(inkypaint-test-presence PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(inkypaint-test-presence PRIVATE Qt6::Core)
+    add_test(NAME launcher_presence COMMAND inkypaint-test-presence)
 endif()
 
 if(BUILD_TESTING)

@@ -732,6 +732,13 @@ setting Native keyboard and mouse
     words Off|On
     help 1 = an experiment: the console's own mouse and keyboard devices report the PC's (where the pointer is over
     help the game's picture, its buttons, wheel and movement; the keys held), for a game that reads them itself
+setting Discord presence status
+    key discord_presence_status
+    int 0 1
+    default 1
+    words Off|On
+    help 1 = once a second, writes what the game shows (its scene, battle rule and stage) to <game>.presence.json
+    help beside the log, which the launcher reads for Discord's rich presence
 setting UI census
     key ui_census
     int 0 1

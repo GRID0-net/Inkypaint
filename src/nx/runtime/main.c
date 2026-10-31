@@ -9,6 +9,7 @@
 #include "nx/runtime/inkypaint_graphics.h"
 #include "nx/runtime/inkypaint_framerate.h"
 #include "nx/runtime/inkypaint_mouselook.h"
+#include "nx/runtime/inkypaint_presence.h"
 #include "nx/runtime/inkypaint_calltrace.h"
 #include "nx/runtime/inkypaint_ui.h"
 #include "common/cpu/recompiler/llvm/gdb_jit.h"
@@ -540,7 +541,10 @@ static void frontend_loop(void) {
         hid_update();
         vi_vsync_tick();
         phase = frontend_phase("HID/vsync publication", phase);
-        if (++tick % 60 == 0) ini_poll(0);
+        if (++tick % 60 == 0) {
+            ini_poll(0);
+            inkypaint_presence_tick();
+        }
         frontend_frame();
         phase = frontend_phase("settings/overlay/capture", phase);
         SNX_ZONE_END(z_frontend);
@@ -602,6 +606,7 @@ static void frontend_loop(void) {
             plat_sleep_ns((i64)(next - now));
     }
     ini_poll(1); /* the settings the game's menu changed, even over an edit of the file */
+    inkypaint_presence_exit(); /* on the thread that writes it */
     snx_save_before_exit();
     LOG("Exit.\n");
     snx_tracy_shutdown();
@@ -947,6 +952,7 @@ int snx_main(int argc, char** argv) {
     inkypaint_graphics_init();
     inkypaint_framerate_init();
     inkypaint_mouselook_init();
+    inkypaint_presence_init();
     inkypaint_ui_init();
     inkypaint_calltrace_init(); /* last: it wraps every slot, the hooks above too */
     read_npdm();

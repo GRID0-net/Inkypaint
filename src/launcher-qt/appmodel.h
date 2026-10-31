@@ -24,6 +24,7 @@ class AppModel : public QObject {
     Q_PROPERTY(QString dataFolder READ dataFolder NOTIFY changed)
     Q_PROPERTY(QString spaceLine READ spaceLine NOTIFY changed)
     Q_PROPERTY(bool hideWhilePlaying READ hideWhilePlaying WRITE setHideWhilePlaying NOTIFY changed)
+    Q_PROPERTY(bool discordPresence READ discordPresence WRITE setDiscordPresence NOTIFY changed)
     Q_PROPERTY(QUrl logo READ logo CONSTANT)
     Q_PROPERTY(QString gameName READ gameName CONSTANT)
     Q_PROPERTY(QString gameVersion READ gameVersion CONSTANT)
@@ -46,6 +47,12 @@ public:
     QString spaceLine() const;
     bool hideWhilePlaying() const { return hide_; }
     void setHideWhilePlaying(bool on);
+    bool discordPresence() const { return discord_; }
+    void setDiscordPresence(bool on);
+    qint64 gamePid() const { return game_ ? game_->processId() : 0; }
+    QDateTime gameStarted() const { return started_; }
+    // the runtime's status for the rich presence, beside its log (src/nx/runtime/inkypaint_presence.c)
+    QString presenceFile() const;
     QUrl logo() const;
     QString gameName() const { return Game::name; }
     QString gameVersion() const { return Game::version; }
@@ -100,5 +107,6 @@ private:
     QDateTime started_;
     QString lastExit_;
     bool hide_ = true;
+    bool discord_ = true;
     bool stopping_ = false; // Quit was asked for: its end is no surprise
 };

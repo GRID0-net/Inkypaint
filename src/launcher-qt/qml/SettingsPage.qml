@@ -114,6 +114,32 @@ PageScroll {
             }
         }
     }
+    GlassCard { // the launcher's own, kept by the launcher and not in the game's settings file
+        objectName: "Launcher"
+        visible: page.inputPage === ""
+        Layout.fillWidth: true
+        ColumnLayout {
+            width: parent.width
+            spacing: 16
+            InkText { text: "Launcher"; kind: "title" }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 16
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 0
+                    spacing: 2
+                    InkText { text: "Discord rich presence"; font.weight: Font.DemiBold; wrapMode: Text.NoWrap }
+                    InkText { text: "Shows your friends on Discord what you are playing, from the launcher's page to the stage of your battle."; kind: "caption"; Layout.fillWidth: true }
+                }
+                InkSwitch {
+                    Accessible.name: "Discord rich presence"
+                    checked: app.discordPresence
+                    onToggled: app.discordPresence = checked
+                }
+            }
+        }
+    }
     RowLayout {
         Layout.fillWidth: true
         InkText { text: "The game reads them when it starts, except where they say otherwise."; kind: "caption"; Layout.fillWidth: true }

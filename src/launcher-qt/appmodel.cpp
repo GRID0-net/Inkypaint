@@ -12,6 +12,7 @@ AppModel::AppModel(QObject* parent) : QObject(parent) {
     QSettings s;
     paths_.data = s.value("dataFolder", GamePaths::defaultData()).toString();
     hide_ = s.value("hideWhilePlaying", true).toBool();
+    discord_ = s.value("discordPresence", true).toBool();
     settings_.setPath(paths_.settings());
     online_.setSettings(&settings_);
     if (!paths_.isPrepared()) pane_ = "files";
@@ -51,6 +52,17 @@ QString AppModel::spaceLine() const {
     qint64 free = freeSpace(paths_.data);
     if (free < 0) return "Needs about 13 GB.";
     return "Needs about 13 GB, " + QLocale().formattedDataSize(free, 1, QLocale::DataSizeTraditionalFormat) + " free.";
+}
+
+void AppModel::setDiscordPresence(bool on) {
+    discord_ = on;
+    QSettings().setValue("discordPresence", on);
+    emit changed();
+}
+
+QString AppModel::presenceFile() const {
+    QString log = paths_.gameLog();
+    return log.left(log.size() - int(qstrlen(".log"))) + QStringLiteral(".presence.json");
 }
 
 void AppModel::setHideWhilePlaying(bool on) {
