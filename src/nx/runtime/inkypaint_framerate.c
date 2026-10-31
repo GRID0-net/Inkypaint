@@ -892,7 +892,10 @@ void inkypaint_framerate_init(void) {
                 fatal("Could not install the actor phase hooks");
             LOG("framerate: native actor frame setup, with stateful actor callbacks fixed at 60 Hz\n");
         }
-        g_framerate.model_enabled = !getenv("INKYPAINT_MODEL_INTERP") || strcmp(getenv("INKYPAINT_MODEL_INTERP"), "0");
+        /* Off by default: with the models' world transform interpolated the player's hair trailed the head while moving
+           (the hair is simulated from the step's pose, not the interpolated one), and INKYPAINT_MODEL_INTERP=0 fixed it
+           every time it was tried. INKYPAINT_MODEL_INTERP=1 turns it on, characters then move smoothly at 120 */
+        g_framerate.model_enabled = getenv("INKYPAINT_MODEL_INTERP") && !strcmp(getenv("INKYPAINT_MODEL_INTERP"), "1");
         if (g_framerate.model_enabled) {
             if (gr32(MODEL_SET_MTX) != 0xd10183ff || gr32(MODEL_SET_MTX + 0x128) != 0x9711060f)
                 fatal("INKYPAINT_MODEL_INTERP: the model hook does not match this executable");
