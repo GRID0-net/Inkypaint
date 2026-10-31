@@ -647,6 +647,11 @@ type, range and help, tab-separated. Every setting, the recompiler's too, is des
 | `controls` | `1` on Android, else `0` | The [on-screen controls](#on-screen-controls) shown |
 | `controls_snap`, `controls_scale`, `controls_opacity`, `controls_rel_center`, `controls_dpad_slide`, `controls_haptics` | `0`, `50`, `100`, `1`, `1`, `1` | As [On-screen controls](#on-screen-controls) describes them. `controls_scale` runs from `0` to `100` for 50% to 150% |
 | `keyboard_mouse_enabled` | `1` | Keyboard play, mouse aim, menu clicks and mouse touch input. Physical controller activity takes priority until it has been idle for 1.5 seconds |
+| `mouse_aim` | `1` | The mouse aims as the controller's motion sensor does, once a click in the window takes it. Free the mouse's key, the menu or another window lets it go |
+| `native_mouse_camera` | `0` | `1` turns the player's camera directly with the mouse, like a PC game, instead of through the motion sensor. Chosen before launch. `0` runs the game's own camera code unchanged |
+| `mouse_sensitivity`, `mouse_sensitivity_y` | `100`, `100` | How far the mouse turns the aim, in percent (`5` to `1000`), and the vertical sensitivity in percent of the horizontal one (`10` to `400`) |
+| `mouse_invert_y` | `0` | `1` aims down when the mouse moves up |
+| `mouse_in_menus` | `1` | In the game's menus the mouse is let go and points: the cursor follows it onto a button and a left click picks it |
 | `gamepad_menu_layout` | `0` | Swap A/B and X/Y in detected menus, and A/B alone while a visible A-button interaction guide is shown; restore gameplay mappings outside. Prompts retain Nintendo labels |
 | `gamepad_swap_ab` | `0` | `1` swaps a gamepad's A and B. `0` sends A, B, X and Y where the console's are |
 | `gamepad_map` | none | The player's map over that, below |
