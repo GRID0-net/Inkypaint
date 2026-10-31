@@ -246,7 +246,7 @@ PageScroll {
             width: parent.width
             spacing: 12
             InkText { text: "DLC (optional)"; kind: "headline" }
-            InkText { text: "Install your own Expansion Pass DLC packages, one at a time. No recompile needed. The base game works without them. DLC gameplay is untested."; kind: "secondary"; Layout.fillWidth: true }
+            InkText { text: "Install your own Expansion Pass DLC packages, several at once if you like. No recompile needed. The base game works without them. DLC gameplay is untested."; kind: "secondary"; Layout.fillWidth: true }
             FileRow { title: "prod.keys"; hint: "Choose your keys if they are not already available"; path: app.sources.prodKeys; onChoose: page.pick("prodKeys") }
             FileRow { title: "title.keys"; hint: "Optional; needed for packages that use title keys"; path: app.sources.titleKeys; onChoose: page.pick("titleKeys") }
             InkButton { text: "Install DLC…"; enabled: !app.playing && app.setupStep === "idle"; onClicked: dlcDialog.open() }
@@ -254,9 +254,10 @@ PageScroll {
     }
     FileDialog {
         id: dlcDialog
-        title: "Choose a DLC package"
+        title: "Choose DLC packages"
+        fileMode: FileDialog.OpenFiles
         nameFilters: ["Switch packages (*.nsp *.dnsp *.xci *.dxci)", "All files (*)"]
-        onAccepted: app.installDlc(selectedFile.toString())
+        onAccepted: app.installDlcs(selectedFiles.map(function(f) { return f.toString() }))
     }
     property string slot: ""
     function pick(which) { slot = which; fileDialog.open() }

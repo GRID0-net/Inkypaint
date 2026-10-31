@@ -125,6 +125,10 @@ void AppModel::installDlc(const QString& file) {
     if (playing() || setupStep_ != "idle") return;
     preparer_.installDlc(file, &sources_, paths_);
 }
+void AppModel::installDlcs(const QStringList& files) {
+    if (playing() || setupStep_ != "idle") return;
+    preparer_.installDlcs(files, &sources_, paths_);
+}
 void AppModel::recompile() {
     setPane("files");
     preparer_.reset();
