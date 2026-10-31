@@ -105,3 +105,27 @@ with a temporary settings store and a synthetic prepared-game folder. it doesn't
 `inkypaint-test-dialogs` takes `tests/launcher_qt_dialogs.qml` and a staged package's QML directory as absolute
 arguments. with `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software`, it checks that fallback file and folder
 pickers open using only the packaged QML modules. missing `Qt.labs.folderlistmodel` must fail that test.
+
+## Closing the game with Escape
+
+Started from the launcher, the game does not close when Escape is pressed in its window. The launcher comes to the front instead and asks whether to close the game, and the game keeps running until the player answers Close the game.
+
+## Discord rich presence
+
+While the launcher is open, Discord shows your friends what you are doing. In the launcher it names the page you are
+on. While the game is set up it shows the extraction or the recompile with its progress. While the game runs it shows
+where you are in Splatoon 3: Splatsville, a lobby, the rule and stage of a battle, the Salmon Run site, Hero Mode or
+Side Order. The runtime writes what the game shows to `<title ID>.presence.json` beside the game's log about once a
+second, and the launcher reads that file every 2 seconds. The runtime's `discord_presence_status` setting turns the
+file off. The switch in Settings turns the whole feature off.
+
+It uses inkypaint's Discord application, whose ID is the default of the CMake cache variable
+`INKYPAINT_DISCORD_APP_ID` (a fork can use its own with `cmake -DINKYPAINT_DISCORD_APP_ID=123456789012345678 ...`).
+The environment variable of the same name overrides it when the launcher starts. With an empty ID the launcher never
+looks for Discord. When Discord is not running it tries
+again every 15 seconds, so starting Discord later is enough.
+
+To make the application, open the Developer Portal at discord.com/developers/applications, create an application
+named the way the presence should read (Discord shows its name as the game, for example "Splatoon 3"), and copy its
+Application ID. Under Rich Presence, Art Assets, upload a large image named `inkypaint` and the small images `plaza`,
+`battle`, `salmon`, `hero` and `sideorder`. An image that is missing is left blank.

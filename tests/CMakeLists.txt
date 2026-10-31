@@ -141,6 +141,18 @@ add_executable(snx-test-inkypaint-frame-policy inkypaint_frame_policy.c)
 snx_test_target(snx-test-inkypaint-frame-policy 99)
 add_test(NAME inkypaint_frame_policy COMMAND snx-test-inkypaint-frame-policy)
 
+add_executable(snx-test-inkypaint-heapscale inkypaint_heapscale.c)
+snx_test_target(snx-test-inkypaint-heapscale 99)
+target_link_libraries(snx-test-inkypaint-heapscale PRIVATE snx_zstd)
+if(NOT WIN32)
+    target_link_libraries(snx-test-inkypaint-heapscale PRIVATE m)
+endif()
+add_test(NAME inkypaint_heapscale COMMAND snx-test-inkypaint-heapscale)
+
+add_executable(snx-test-inkypaint-presence inkypaint_presence.c)
+snx_test_target(snx-test-inkypaint-presence 99)
+add_test(NAME inkypaint_presence COMMAND snx-test-inkypaint-presence)
+
 add_executable(snx-test-inkypaint-frame-clock inkypaint_frame_clock.c)
 snx_test_target(snx-test-inkypaint-frame-clock 99)
 add_test(NAME inkypaint_frame_clock COMMAND snx-test-inkypaint-frame-clock)

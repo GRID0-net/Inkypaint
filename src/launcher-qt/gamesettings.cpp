@@ -48,7 +48,7 @@ const QVariantList& catalog() {
                            "Widens the world to the window, the interface stays 16:9.", "toggle", "1", true),
                    setting("language", "Display", "Game language", "", "choice", "1", true, languages)}),
             group("Graphics", "graphics",
-                  {setting("resolution", "Graphics", "Resolution", "Scale the 3D scene, keeping the interface at its normal resolution. 1× follows the game.",
+                  {setting("resolution", "Graphics", "Resolution", "Scale the 3D scene, keeping the interface at its normal resolution. 1× follows the game. Above 1× the game gets more graphics memory and uses at least 6 GB of memory.",
                            "choice", "1", true,
                            {option("0.25", "0.25×"), option("0.5", "0.5×"), option("0.75", "0.75×"), option("1", "1× (console)"),
                             option("1.5", "1.5×"), option("2", "2×"), option("3", "3×"), option("4", "4×")}),
@@ -80,6 +80,10 @@ const QVariantList& catalog() {
             group("Controls", "controls", {
                 setting("keyboard_mouse_enabled", "Keyboard and mouse", "Keyboard and mouse input",
                         "Controller activity takes priority. Keyboard and mouse resume after the controller is idle.", "toggle", "1", false),
+                setting("native_mouse_camera", "Keyboard and mouse", "Experimental mouse camera",
+                        "The mouse turns the camera directly, like a PC game, and the game's motion controls are not "
+                        "needed. Turn it off to use the regular mouse aim below, which works like motion controls.",
+                        "toggle", "0", false),
                 setting("gamepad_menu_layout", "Controllers", "Xbox/PlayStation layout in menus",
                         "Bottom button confirms in menus and activates visible A-button interaction prompts. Gameplay restores its own layout when the prompt disappears. Prompts keep Nintendo labels.", "toggle", "0", false)}),
             group("Controller input", "controls",
@@ -92,8 +96,9 @@ const QVariantList& catalog() {
                    setting("gamepad_map", "Controllers", "Controller buttons", "Gameplay mappings. The optional menu layout swaps A/B and X/Y in menus.", "controller_map", "", false)}),
             group("Keyboard and mouse", "keyboard",
                   {setting("mouse_aim", "Keyboard and mouse", "Mouse aim",
-                           "Click in the game's window and the mouse aims the way motion controls do (turn the game's "
-                           "motion controls on). Left Alt lets the mouse go, and the game's menu does too.",
+                           "The regular way to aim with the mouse: click in the game's window and it aims the way motion "
+                           "controls do (turn the game's motion controls on). Left Alt lets the mouse go, and the game's "
+                           "menu does too. The experimental mouse camera replaces this while it is on.",
                            "toggle", "1", false),
                    setting("mouse_sensitivity", "Keyboard and mouse", "Mouse sensitivity",
                            "How far the mouse turns the aim. The game's own motion sensitivity applies on top.", "choice",

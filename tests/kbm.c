@@ -192,6 +192,33 @@ int main(void) {
     CHECK(!m.exact && fabsf(m.angular_velocity[2] - (0.5f - 6.0f / 360.0f / 0.01f)) < 1e-3f);
     kbm_aim_reset();
 
+    /* ---- the native mouse camera: the counts go to kbm_look_take, all of them once, and never to the gyro */
+    {
+        float dx, dy;
+        g_settings.native_mouse_camera = 1;
+        kbm_mouse_moved(10, -4);
+        kbm_mouse_moved(5.5f, 1);
+        memset(&m, 0, sizeof m);
+        kbm_motion(&m, 16666667u);
+        CHECK(!m.valid && m.angular_velocity[0] == 0 && m.angular_velocity[1] == 0 && m.angular_velocity[2] == 0);
+        CHECK(kbm_look_take(&dx, &dy) == 1 && dx == 15.5f && dy == -3.0f);
+        CHECK(kbm_look_take(&dx, &dy) == 1 && dx == 0 && dy == 0);
+        /* keyboard and mouse off: nothing taken, and what was there is cleared */
+        kbm_mouse_moved(7, 7);
+        g_settings.keyboard_and_mouse_input = 0;
+        CHECK(kbm_look_take(&dx, &dy) == 0 && dx == 0 && dy == 0);
+        g_settings.keyboard_and_mouse_input = 1;
+        CHECK(kbm_look_take(&dx, &dy) == 1 && dx == 0 && dy == 0);
+        /* off: nothing goes to it, the gyro has the mouse again */
+        g_settings.native_mouse_camera = 0;
+        kbm_mouse_moved(100, 0);
+        CHECK(kbm_look_take(&dx, &dy) == 0 && dx == 0 && dy == 0);
+        memset(&m, 0, sizeof m);
+        kbm_motion(&m, 10000000u);
+        CHECK(m.angular_velocity[2] < 0.0f);
+        kbm_aim_reset();
+    }
+
     /* ---- through hid_motion as the game reads it: a flick of 3000 counts (180 degrees) in one sample, faster than
        the sensor reads, comes out over the next samples, and the angle the game is told sums to half a turn */
     memset(&state, 0, sizeof state);

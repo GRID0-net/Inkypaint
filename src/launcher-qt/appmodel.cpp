@@ -12,6 +12,7 @@ AppModel::AppModel(QObject* parent) : QObject(parent) {
     QSettings s;
     paths_.data = s.value("dataFolder", GamePaths::defaultData()).toString();
     hide_ = s.value("hideWhilePlaying", true).toBool();
+    discord_ = s.value("discordPresence", true).toBool();
     settings_.setPath(paths_.settings());
     online_.setSettings(&settings_);
     if (!paths_.isPrepared()) pane_ = "files";
@@ -51,6 +52,40 @@ QString AppModel::spaceLine() const {
     qint64 free = freeSpace(paths_.data);
     if (free < 0) return "Needs about 13 GB.";
     return "Needs about 13 GB, " + QLocale().formattedDataSize(free, 1, QLocale::DataSizeTraditionalFormat) + " free.";
+}
+
+void AppModel::setDiscordPresence(bool on) {
+    discord_ = on;
+    QSettings().setValue("discordPresence", on);
+    emit changed();
+}
+
+QString AppModel::presenceFile() const {
+    QString log = paths_.gameLog();
+    return log.left(log.size() - int(qstrlen(".log"))) + QStringLiteral(".presence.json");
+}
+
+QString AppModel::quitRequestFile() const {
+    QString log = paths_.gameLog();
+    return log.left(log.size() - int(qstrlen(".log"))) + QStringLiteral(".quit-request");
+}
+
+void AppModel::pollQuitRequest() {
+    if (!game_ || !QFile::exists(quitRequestFile())) return;
+    QFile::remove(quitRequestFile());
+    if (askingQuit_) return; // the popup is already open
+    askingQuit_ = true;
+    if (hide_) emit restoreRequested(); // hidden while playing: the player has to see the question
+    emit quitRequested();
+}
+
+void AppModel::answerQuit(bool close) {
+    askingQuit_ = false;
+    if (close) {
+        stop();
+        return;
+    }
+    if (hide_ && game_) emit minimizeRequested();
 }
 
 void AppModel::setHideWhilePlaying(bool on) {
@@ -187,6 +222,9 @@ void AppModel::play() {
     // online, the game signs in to GRID0+ itself: the password goes on its stdin, never on its command line or in the
     // game's settings
     QString password = online_.passwordForGame();
+    gameOnline_ = !password.isNull();
+    QFile::remove(quitRequestFile()); // a request left by an earlier run is not this one's
+    askingQuit_ = false;
     game_ = new QProcess(this);
     game_->setProgram(paths_.executable());
     game_->setWorkingDirectory(paths_.gameDir());
@@ -207,6 +245,12 @@ void AppModel::play() {
     game_->closeWriteChannel();
     started_ = QDateTime::currentDateTime();
     QSettings().setValue("lastPlayed", started_);
+    if (!quitPoll_) {
+        quitPoll_ = new QTimer(this);
+        quitPoll_->setInterval(250);
+        connect(quitPoll_, &QTimer::timeout, this, &AppModel::pollQuitRequest);
+    }
+    quitPoll_->start();
     if (hide_)
         QTimer::singleShot(1500, this, [this] {
             if (game_) emit minimizeRequested();
@@ -224,9 +268,13 @@ void AppModel::stop() {
 }
 
 void AppModel::ended(int status, QProcess::ExitStatus how) {
+    gameOnline_ = false;
     qint64 ran = started_.isValid() ? started_.secsTo(QDateTime::currentDateTime()) : 0;
     game_->deleteLater();
     game_ = nullptr;
+    if (quitPoll_) quitPoll_->stop();
+    QFile::remove(quitRequestFile());
+    askingQuit_ = false;
     settings_.reload();
     emit restoreRequested();
     // a game that stops by itself within seconds didn't start: say so, with where to look

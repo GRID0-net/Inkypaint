@@ -635,7 +635,8 @@ static void game_gfx_calc(CPU* c, u64 entry) {
     u64 slot = readable(GSYS_GLOBAL_SLOT, 8) ? gr64(GSYS_GLOBAL_SLOT) : 0;
     u64 global = readable(slot, 8) ? gr64(slot) : 0;
     if (readable(global, 0xc38)) {
-        float seconds = ((float)(t_frame.sample.tick - 1) + t_frame.sample.alpha) / 60.f;
+        /* tick is 0 on the first sample and after a clock reset: counting back from it would wrap the u64 */
+        float seconds = ((float)(t_frame.sample.tick ? t_frame.sample.tick - 1 : 0) + t_frame.sample.alpha) / 60.f;
         u32 bits;
         memcpy(&bits, &seconds, sizeof bits);
         gw32(global + 0xc34, bits);

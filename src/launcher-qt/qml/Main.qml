@@ -26,6 +26,60 @@ ApplicationWindow {
     // the game's settings and the preparation, read again when the window comes back to the front
     onActiveChanged: if (active && !app.playing) app.refresh()
 
+    // Escape in the game, started from here: the launcher asks before the game closes (AppModel::quitRequested)
+    Connections {
+        target: app
+        function onQuitRequested() {
+            if (quitPopup.opened) return
+            quitPopup.open()
+            window.raise()
+            window.requestActivate() // a Wayland compositor may refuse, the popup still waits
+        }
+        function onChanged() { // the game ended by itself: nothing left to ask
+            if (!app.playing && quitPopup.opened) { quitPopup.answered = true; quitPopup.close() }
+        }
+    }
+
+    Popup {
+        id: quitPopup
+        modal: true
+        focus: true
+        anchors.centerIn: Overlay.overlay
+        width: 420
+        padding: 0
+        closePolicy: Popup.CloseOnEscape
+        onClosed: if (!answered) app.answerQuit(false) // Escape: keep playing
+        onAboutToShow: { answered = false; keepPlaying.forceActiveFocus() }
+        property bool answered: false
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.55) }
+        background: Rectangle { radius: 22; color: Theme.dusk; border.color: Theme.glassBorder; border.width: 1 }
+        contentItem: ColumnLayout {
+            spacing: 14
+            InkText { text: "Close Splatoon 3?"; kind: "title"; Layout.fillWidth: true; Layout.margins: 24; Layout.bottomMargin: 0 }
+            InkText { text: "The game will close."; kind: "secondary"; Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24 }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 24
+                Layout.topMargin: 6
+                spacing: 10
+                Item { Layout.fillWidth: true }
+                InkButton {
+                    text: "Close the game"
+                    destructive: true
+                    onClicked: { quitPopup.answered = true; quitPopup.close(); app.answerQuit(true) }
+                }
+                InkButton {
+                    id: keepPlaying
+                    text: "Keep playing"
+                    prominent: true
+                    onClicked: { quitPopup.answered = true; quitPopup.close(); app.answerQuit(false) }
+                    Keys.onReturnPressed: clicked()
+                    Keys.onEnterPressed: clicked()
+                }
+            }
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0

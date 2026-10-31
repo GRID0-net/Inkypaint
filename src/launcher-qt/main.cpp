@@ -5,6 +5,7 @@
 // in to GRID0+ and starts the game
 #include "appmodel.h"
 #include "launchersettings.h"
+#include "presencemodel.h"
 #include <QGuiApplication>
 #include <QIcon>
 #include <QQmlApplicationEngine>
@@ -22,6 +23,8 @@ int main(int argc, char** argv) {
     QQuickStyle::setStyle("Basic"); // drawn by the app's own components, the same on every system
     migrateLauncherSettings();
     AppModel model;
+    PresenceModel presence(&model); // Discord's rich presence: inert without an application ID
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &presence, [&presence] { presence.shutdown(); });
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("app", &model);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },

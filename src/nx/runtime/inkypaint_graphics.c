@@ -6,6 +6,7 @@
 #include "nx/runtime/inkypaint_graphics.h"
 #include "nx/runtime/inkypaint_bounds.h"
 #include "nx/runtime/inkypaint_graphics_policy.h"
+#include "nx/runtime/inkypaint_heapscale.h"
 #include "nx/runtime/driver/inkypaint.h"
 #include "nx/runtime/guest_jit.h"
 #include "nx/runtime/loader.h"
@@ -48,7 +49,8 @@ void inkypaint_graphics_gpu_time(uint64_t ns) {
     __atomic_load(&g_graphics.scale, &scale, __ATOMIC_RELAXED);
     if (!g_settings.dynamic_resolution) return;
     float next = inkypaint_resolution_sample(&g_graphics.policy, ns, scale, g_settings.minimum_render_scale,
-                                             g_settings.resolution_scale, g_settings.dynamic_resolution_target);
+                                             inkypaint_heapscale_clamp(g_settings.resolution_scale),
+                                             g_settings.dynamic_resolution_target);
     if (next != scale) {
         __atomic_store(&g_graphics.scale, &next, __ATOMIC_RELAXED);
         LOG("graphics: dynamic render scale %.3fx (GPU %.2f ms, target %d FPS)\n", next,
@@ -210,7 +212,7 @@ void inkypaint_graphics_init(void) {
         g_graphics.hook[i].original = jit_wait(sites[i].address);
         if (!g_graphics.hook[i].original) return;
     }
-    g_graphics.scale = g_settings.resolution_scale;
+    g_graphics.scale = inkypaint_heapscale_clamp(g_settings.resolution_scale);
     for (unsigned i = 0; i < 8; i++) g_disp[(sites[i].address - g_code_lo) / 4] = quality;
     g_graphics.enabled = 1;
     LOG("graphics: engine quality hooks ready, render scale %.3fx%s\n", g_graphics.scale,

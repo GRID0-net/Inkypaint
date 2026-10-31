@@ -29,6 +29,8 @@ void kbm_set_menu(int on);
    keys and mouse aim on handoff; held keys never reappear when control returns. */
 void kbm_controller_activity(int active, u64 now_ns);
 int kbm_enabled(void);
+/* a key of the .ini's Keyboard and mouse section and its value: 1 when it is one of that section's */
+int kbm_ini(const char* key, const char* value);
 
 /* an input going down or up. 1 when it was Free the mouse's going down: the caller lets the mouse go (or takes it) */
 int kbm_input(int code, int down);
@@ -44,5 +46,8 @@ void kbm_mouse_moved(float dx, float dy);
    sensor gets the mouse's turn added. Nothing when mouse aim is off or nothing moved and there is no aim to keep */
 void kbm_motion(PadMotion* m, u64 dt_ns);
 void kbm_aim_reset(void); /* the aim's pitch and what it still had to turn, forgotten */
+/* native_mouse_camera: the counts the mouse moved since the last call, taken. 1 with them when keyboard and mouse is
+   enabled and the setting is on, else 0 with both cleared. With the setting on, kbm_motion feeds no gyro */
+int kbm_look_take(float* dx, float* dy);
 
 #endif

@@ -176,6 +176,7 @@ setting Resolution scale
     default 1
     startup
     help Scene render scale, 0.25 to 4. With the engine quality hooks, the UI and GPU data textures keep their normal size
+    help Above 1 the game gets larger graphics heaps and at least 6 GB of memory (memory_gb), 8 GB above 2
 setting Dynamic resolution
     key dynamic_resolution
     int 0 1
@@ -474,6 +475,13 @@ setting Mouse aim
     words Off|On
     help 1 = the mouse aims as the controller's motion sensor does (the game's motion controls on) once a click in the
     help window takes it; Free the mouse's key, the menu or another window lets it go
+setting Native mouse camera
+    key native_mouse_camera
+    int 0 1
+    default 0
+    words Off|On
+    help 1 = the mouse turns the player's camera directly, like a PC game, instead of acting as the controller's
+    help motion sensor. Chosen before launch. 0 = the game's own camera code runs unchanged
 setting Mouse sensitivity
     key mouse_sensitivity
     int 5 1000
@@ -725,6 +733,13 @@ setting Native keyboard and mouse
     words Off|On
     help 1 = an experiment: the console's own mouse and keyboard devices report the PC's (where the pointer is over
     help the game's picture, its buttons, wheel and movement; the keys held), for a game that reads them itself
+setting Discord presence status
+    key discord_presence_status
+    int 0 1
+    default 1
+    words Off|On
+    help 1 = once a second, writes what the game shows (its scene, battle rule and stage) to <game>.presence.json
+    help beside the log, which the launcher reads for Discord's rich presence
 setting UI census
     key ui_census
     int 0 1

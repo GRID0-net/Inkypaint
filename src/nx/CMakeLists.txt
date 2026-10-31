@@ -35,8 +35,8 @@ endfunction()
 
 snx_component(core runtime/main.c runtime/maintenance.c runtime/arm.c runtime/loader.c runtime/rtapi.c runtime/clock.c runtime/crash.c runtime/options.c
               runtime/startup.c runtime/gdbstub.c runtime/present.c runtime/guest_jit.c
-              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_graphics.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c runtime/inkypaint_ui.c)
-target_link_libraries(snx_core PRIVATE snx_driver snx_lz4 snx_build_info)
+              runtime/cheats.c runtime/inkypaint_display.c runtime/inkypaint_mouselook.c runtime/inkypaint_presence.c runtime/inkypaint_launcher.c runtime/inkypaint_graphics.c runtime/inkypaint_heapscale.c runtime/inkypaint_framerate.c runtime/inkypaint_calltrace.c runtime/inkypaint_ui.c)
+target_link_libraries(snx_core PRIVATE snx_driver snx_lz4 snx_zstd snx_build_info) # zstd: inkypaint_heapscale.c
 target_link_libraries(snx_core PUBLIC snx_settings_runtime) # the game's .ini's tables (cmake/settings.cmake)
 if(APPLE)
     # main.c's weak snx_module_static, which no build defines yet: ld64 refuses an undefined symbol, weak or not,
