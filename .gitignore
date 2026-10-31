@@ -101,3 +101,4 @@ edenprobe-run/
 # inkypaint's working notes and throwaway prototypes: this checkout's own, not the project's
 /handoff.md
 /prototypes/
+/TODO.local.md
