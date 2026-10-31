@@ -1374,6 +1374,21 @@ static void test_overlay(void) {
         CHECK(fs_dlcs(&ids) == 1 && ids[0] == 0x0100000000AB1001ULL);
     }
     pm_unlock(&g_hle.fs.tree.lock);
+    {
+        /* The extractor publishes uppercase title IDs. OpenDataStorageByDataId
+           must resolve that spelling, rather than silently returning an empty
+           synthetic system archive. */
+        Request r;
+        SvcObj* proxy = nn_fssrv_sf_IFileSystemProxy_new();
+        request(&r, 202);
+        argument64(&r, 8, 0x0100000000AB1001ULL);
+        dispatch(proxy, &r, 0);
+        CHECK(r.c.nout_objs == 1);
+        SvcObj* archive = r.c.out_objs[0];
+        CHECK(get_size(archive) == strlen("a DLC"));
+        svcobj_unref(archive);
+        svcobj_unref(proxy);
+    }
     CHECK(snx_is_file("overlay-data/0100000000AB0000_data/romfs/b.bin")); /* hidden, never removed */
     romfs_init();
     CHECK(g_hle.fs.nrfiles == 1);

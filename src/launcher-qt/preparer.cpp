@@ -87,6 +87,7 @@ void Preparer::start(const GameSources* sources, const GamePaths& paths) {
         return;
     }
     cancelled_ = false;
+    dlc_ = false;
     log_.clear();
     emit logChanged();
     started_ = QDateTime::currentDateTime();
@@ -123,6 +124,34 @@ void Preparer::step() {
              QString::number(jobs()), "-O", "2"});
     }
     emit changed();
+}
+
+void Preparer::installDlc(const QString& file, const GameSources* sources, const GamePaths& paths) {
+    if (running()) return;
+    dlc_ = true;
+    extractArgs_.clear();
+    if (!paths.isPrepared() || !Bundled::isComplete()) {
+        fail("Prepare the base game and install the runtime first.");
+        return;
+    }
+    paths_ = paths;
+    extractArgs_ = {"--data", paths.data, "--install-dlc", localPath(file), "--outdir", paths.recompiled()};
+    if (!sources->prodKeys_.isEmpty()) extractArgs_ << "--keys" << sources->prodKeys_;
+    if (!sources->titleKeys_.isEmpty()) extractArgs_ << "--title-keys" << sources->titleKeys_;
+    retryDlc();
+}
+
+void Preparer::retryDlc() {
+    if (running() || !dlc_ || extractArgs_.isEmpty()) return;
+    cancelled_ = false;
+    log_.clear();
+    emit logChanged();
+    started_ = QDateTime::currentDateTime();
+    extract_ = compile_ = 0;
+    phase_ = "installingDlc";
+    detail_ = "Installing optional DLC; the base game is kept";
+    emit changed();
+    run(extractArgs_);
 }
 
 void Preparer::run(const QStringList& args) {
@@ -181,6 +210,7 @@ void Preparer::cancel() {
 void Preparer::reset() {
     if (running()) return;
     phase_ = "idle";
+    dlc_ = false;
     failure_.clear();
     emit changed();
 }

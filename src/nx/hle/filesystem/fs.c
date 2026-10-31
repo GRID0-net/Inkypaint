@@ -220,7 +220,15 @@ static void dlcs_open(const char* keys, const char* title_keys) {
     games = snx_dirname(folder);
     repo = snx_dirname(games);
     if (!ids) fatal("Out of memory for the game's DLCs");
+#ifdef SNX_IOS_AOT_ONLY
+    char* manifest = snx_path_join(inkypaint_ios_assets(), "dlc.ini");
+    char* bundled_addons = snx_ini_value(manifest, "addons");
+    count = snx_addons_parse(bundled_addons, g_gamename, ids, SNX_ADDONS_MAX);
+    free(bundled_addons);
+    free(manifest);
+#else
     count = snx_addons_parse(g_settings.game_addons, g_gamename, ids, SNX_ADDONS_MAX);
+#endif
     g_hle.fs.aocs = calloc(count ? count : 1, sizeof *g_hle.fs.aocs);
     g_hle.fs.dlcs = calloc(count ? count : 1, sizeof *g_hle.fs.dlcs);
     if (!g_hle.fs.aocs || !g_hle.fs.dlcs) fatal("Out of memory for the game's DLCs");
@@ -234,7 +242,11 @@ static void dlcs_open(const char* keys, const char* title_keys) {
             continue;
         }
         snx_title_text(ids[i].id, text);
+#ifdef SNX_IOS_AOT_ONLY
+        image = snx_format("%s/system/archives/%s.romfs", inkypaint_ios_assets(), text);
+#else
         image = snx_format("%s%s_%s_data/system/archives/%s.romfs", g_exedir, g_gamename, text, text);
+#endif
         ini = snx_format("%s%s_%s.ini", g_confdir, g_gamename, text);
         dump = snx_is_file(image) ? NULL : snx_ini_value(ini, "source");
         if (snx_is_file(image)) {
@@ -444,9 +456,10 @@ void fs_init(const char* keys, const char* title_keys) {
     /* Read assets from the signed app; saves and temporary storage stay in
        Documents. No multi-GB first-launch extraction is needed. */
     static const char* const bundled[] = {"exefs", "romfs", "romfs.bin", "control.nacp", "icon.jpg", NULL};
+    static const char* const bundled_merged[] = {"system", NULL};
     const char* assets = inkypaint_ios_assets();
     if (!assets[0] || !snx_is_dir(assets)) fatal("This iOS package is missing its bundled game assets");
-    r = fs_tree_overlay(&g_hle.fs.tree, assets, bundled, NULL);
+    r = fs_tree_overlay(&g_hle.fs.tree, assets, bundled, bundled_merged);
     if (r != FS_TREE_OK) fatal("Could not mount bundled game assets (error %d)", r);
 #endif
     LOG("startup: opening content overlays\n");
@@ -1953,6 +1966,12 @@ static int nn_fssrv_sf_IFileSystemProxy_OpenDataStorageByDataId(SvcObj* self, nn
     pm_lock(&g_hle.fs.tree.lock);
     FsNode* node;
     FsTreeResult r = fs_tree_lookup(&g_hle.fs.tree, NULL, p, &node);
+    if (r == FS_TREE_NOTFOUND) {
+        /* DLC extraction names images with snx_title_text (uppercase).
+           Preserve the lowercase path used by existing system archives. */
+        snprintf(p, sizeof p, "system/archives/%016llX.romfs", (unsigned long long)data_id);
+        r = fs_tree_lookup(&g_hle.fs.tree, NULL, p, &node);
+    }
     if (r == FS_TREE_NOTFOUND) {
         if (data_id == NGWORD2_DATA_ID) {
             r = fs_tree_add_virtual(&g_hle.fs.tree, p, g_hle.fs.ngword2rom, g_hle.fs.ngword2rom_size, &node);

@@ -22,8 +22,19 @@
 #define MODULE_CALC 0xcda80d0ull
 #define FRAME 0xc5316d4ull
 #define CALC 0x925b1b0ull
+/* sead::ControllerMgr::calc: refresh devices, then derive each controller's
+   held/trigger/release state. Both stages must share the consumers' tick. */
+#define INPUT_CALC 0xc5a2030ull
 #define CAMERA_VIEW 0xc64c570ull
+#define SCENE_CAMERA_VIEW 0xc65aec4ull
+#define RENDER_CAMERA_VIEW 0xc74d7c8ull
 #define GAME_GFX_CALC 0x9364490ull
+#define GFX_VISUAL_CALC 0xb7082e0ull
+#define GSYS_GLOBAL_SLOT 0xdf25148ull
+#define SCENE_RESET 0xc6db710ull
+#define ACTOR_CALC2 0x91d3db0ull
+#define ACTOR_AFTER_CALC2 0x91d3ee4ull
+#define ACTOR_SPECIAL_CALC2 0x932a8acull
 /* The actor manager's base-proc scheduling: (manager, frame info, phase mask w2, ...). The Actor module's per-frame
    job calls it with every phase (0xf). The game's own split mode (actor module byte +0x133 bit 0) calls phase 0 alone
    once per simulation step (0xccddbb0, between catch-up steps) and phase 1 alone once per frame (0xccdc740) */
@@ -58,7 +69,7 @@ typedef struct {
     char name[65];
 } FrameJob;
 typedef struct {
-    u64 object, projection, frame, tick;
+    u64 object, frame, tick;
     u32 index;
     u64 projection_hash;
     float previous[12], current[12];
@@ -66,24 +77,26 @@ typedef struct {
 } FrameCamera;
 typedef struct {
     u64 model, vtable, tick, frame;
-    u64 context, prepared_frame, skeleton;
+    u64 skeleton;
     float previous[12], current[12], previous_scale[3], current_scale[3];
     int history;
 } FrameModel;
 static __thread struct {
     InkypaintFrameSample sample;
     u64 owner, frame;
-    int replaying;
 } t_frame;
 static struct {
-    GuestFn build_graph, module_calc, frame, calc, camera_view, game_gfx_calc, actor_schedule, model_set_mtx, model_calc, anim_advance;
+    GuestFn build_graph, module_calc, frame, calc, input_calc;
+    GuestFn camera_view, scene_camera_view, render_camera_view, game_gfx_calc, gfx_visual_calc, scene_reset;
+    GuestFn actor_schedule, actor_calc2, actor_after_calc2, actor_special_calc2;
+    GuestFn model_set_mtx, model_calc, anim_advance;
     GuestFn execute[sizeof executors / sizeof *executors];
     PMutex lock;
     FrameJob jobs[JOB_SLOTS];
     InkypaintFrameClock clock;
     InkypaintFrameSample sample;
     FrameCamera cameras[128];
-    u64 frame_serial, camera_calls, camera_blends, camera_changes;
+    u64 frame_serial, camera_calls, camera_blends, camera_changes, camera_inputs;
     u64 sampled_frames, logic_steps, extra_frames, discarded_steps;
     u64 report_ns;
     int target, trace, simulating, camera_enabled;
@@ -93,11 +106,12 @@ static struct {
     char extra[1024]; /* INKYPAINT_GATE_EXTRA: ",name,name," of jobs gated though their graph's aren't */
     unsigned max_steps; /* INKYPAINT_MAX_STEPS: a frame's simulation steps at most, 0 for the clock's (up to 6) */
     unsigned logic_hz;  /* INKYPAINT_LOGIC_HZ: the game's clock slowed to this many steps a second (test only) */
-    int actor_render;   /* INKYPAINT_ACTOR_RENDER=1: the Actor module job runs on extra frames (wrong: actor logic) */
-    u64 actor_phase_frames, actor_split_frames;
+    /* Native actor-manager frame setup and completion run per render; stateful
+       SplActor callbacks and the special actor delegate stay on fixed ticks. */
+    int actor_render;
+    u64 actor_phase_frames, actor_split_frames, actor_calls[3], actor_skips[3];
     int model_enabled; /* models' transforms interpolated between steps (INKYPAINT_MODEL_INTERP=0: off) */
-    int model_replay;  /* extra frames set last frame's models again (INKYPAINT_MODEL_REPLAY=0: off) */
-    u64 model_replays, replay_frame, replay_attempts, model_prepares;
+    u64 model_prepares;
     u64 model_calls, model_blends, model_jumps;
     /* each animated model's game time at its last advance (tick and part of one): what it advances by next */
     struct { u64 anim, tick; float alpha; } anims[MODEL_SLOTS];
@@ -122,9 +136,9 @@ static FrameJob* find_job(u64 object) {
         if (!g_framerate.jobs[i].object || g_framerate.jobs[i].object == object) return &g_framerate.jobs[i];
     return NULL;
 }
-static void model_replay(CPU* c, u64 frame);
+static int readable(u64 a, u64 size);
 static void execute_job(CPU* c, u64 entry) {
-    int run = 1, replay = 0;
+    int run = 1;
     /* Nested executor calls need the parent's captured time too; dropping it
        would make model/animation hooks fall back to a newer global sample. */
     InkypaintFrameSample sample = t_frame.sample;
@@ -137,17 +151,24 @@ static void execute_job(CPU* c, u64 entry) {
         owner = job->object;
         frame = job->frame;
         if (run) job->calls++; else job->skips++;
-        /* The module-entry replay ran before Graphics/GameGfx frame setup, which
-           could clear the dirty state it produced. Rebuild models after actor
-           calculation is joined, at its native graphics-consumer boundary. */
-        if (run && g_framerate.target && !g_framerate.no_gate && !sample.steps &&
-            g_framerate.model_replay && g_framerate.model_enabled && !g_framerate.actor_render &&
-            !strcmp(job->name, "GameGfx:PostActorCalc") &&
-            g_framerate.replay_frame != frame) {
-            g_framerate.replay_frame = frame;
-            g_framerate.replay_attempts++;
-            replay = 1;
+        if (run && g_framerate.trace && job->calls == 1 &&
+            (!strcmp(job->name, "Controller") || !strcmp(job->name, "ControllerCheck"))) {
+            u64 module = job->object, vt = gr64(module);
+            LOG("frame-input-module: %s object=%llx vtable=%llx calc=%llx first=%llx second=%llx\n",
+                job->name, (unsigned long long)module, (unsigned long long)vt,
+                (unsigned long long)(readable(vt, 0x70) ? gr64(vt + 0x58) : 0),
+                (unsigned long long)(readable(vt, 0x70) ? gr64(vt + 0x60) : 0),
+                (unsigned long long)(readable(vt, 0x70) ? gr64(vt + 0x68) : 0));
         }
+        if (run && g_framerate.trace && job->calls == 1 &&
+            (!strcmp(job->name, "ControllerCheck") || !strncmp(job->name, "GameUIFactory", 13)) &&
+            readable(job->object, 0x30)) {
+            LOG("frame-delegate: %s executor=%llx delegate=%llx owner=%llx member=%llx adjustment=%llx\n",
+                job->name, (unsigned long long)entry, (unsigned long long)gr64(job->object + 0x10),
+                (unsigned long long)gr64(job->object + 0x18), (unsigned long long)gr64(job->object + 0x20),
+                (unsigned long long)gr64(job->object + 0x28));
+        }
+
     }
     pm_unlock(&g_framerate.lock);
     if (!run) { c->pc = c->x[30]; return; }
@@ -158,7 +179,6 @@ static void execute_job(CPU* c, u64 entry) {
     t_frame.frame = frame;
     for (u32 i = 0; i < sizeof executors / sizeof *executors; i++) {
         if (executors[i] != entry) continue;
-        if (replay) model_replay(c, frame);
         g_framerate.execute[i](c, entry);
         t_frame.sample = before;
         t_frame.owner = old_owner;
@@ -170,6 +190,23 @@ static void execute_job(CPU* c, u64 entry) {
 static void frame(CPU* c, u64 entry) {
     pm_lock(&g_framerate.lock);
     g_framerate.frame_serial++;
+    /* Sample before SysCalc refreshes physical input, not later in AppCalc.
+       Otherwise render-only frames consume edges that the menu never sees. */
+    __atomic_store_n(&g_framerate.simulating, 1, __ATOMIC_RELAXED);
+    if (g_framerate.target && !g_framerate.no_gate) {
+        /* INKYPAINT_LOGIC_HZ=30 slows the game to half speed so that every other frame is an extra one: the
+           extra frames' problems show at once instead of a few times a minute */
+        u64 now = guest_ns();
+        if (g_framerate.logic_hz) now = now / 60 * g_framerate.logic_hz;
+        InkypaintFrameSample sample = inkypaint_frame_sample(&g_framerate.clock, now);
+        if (g_framerate.max_steps && sample.steps > g_framerate.max_steps) sample.steps = g_framerate.max_steps;
+        g_framerate.sampled_frames++;
+        g_framerate.logic_steps += sample.steps;
+        g_framerate.extra_frames += sample.steps == 0;
+        g_framerate.discarded_steps += sample.discarded;
+        g_framerate.sample = sample;
+        __atomic_store_n(&g_framerate.simulating, sample.steps > 0, __ATOMIC_RELAXED);
+    }
     pm_unlock(&g_framerate.lock);
     if (g_framerate.target && !g_framerate.keep_alternation) {
         *(u8*)GP(c->x[0] + 0x222) &= (u8)~3u;
@@ -199,23 +236,26 @@ static void frame(CPU* c, u64 entry) {
             LOG("frame-actors: extra frames: %llu cut to actor phase 1, %llu in the split mode's phase 1 already\n",
                 (unsigned long long)g_framerate.actor_phase_frames, (unsigned long long)g_framerate.actor_split_frames);
         g_framerate.actor_phase_frames = g_framerate.actor_split_frames = 0;
+        if (g_framerate.trace && g_framerate.actor_render)
+            for (u32 i = 0; i < 3; i++) {
+                LOG("frame-actor-state: leaf=%u %llu fixed-step calls, %llu extra-frame calls suppressed\n",
+                    i, (unsigned long long)g_framerate.actor_calls[i], (unsigned long long)g_framerate.actor_skips[i]);
+                g_framerate.actor_calls[i] = g_framerate.actor_skips[i] = 0;
+            }
         if (g_framerate.target)
-            LOG("frame-camera: %llu copies, %llu interpolated, %llu conflicting samples\n",
+            LOG("frame-camera: %llu entries, %llu copies, %llu interpolated, %llu conflicting samples\n",
+                (unsigned long long)g_framerate.camera_inputs,
                 (unsigned long long)g_framerate.camera_calls, (unsigned long long)g_framerate.camera_blends,
                 (unsigned long long)g_framerate.camera_changes);
         g_framerate.camera_calls = g_framerate.camera_blends = g_framerate.camera_changes = 0;
+        g_framerate.camera_inputs = 0;
         if (g_framerate.model_enabled)
-            LOG("frame-replay: %llu boundaries attempted, %llu model refreshes\n",
-                (unsigned long long)g_framerate.replay_attempts, (unsigned long long)g_framerate.model_replays);
-        g_framerate.replay_attempts = 0;
-        if (g_framerate.model_enabled)
-            LOG("frame-models: %llu transforms (%llu set again on extra frames), %llu interpolated, %llu too far apart "
-                "to\n", (unsigned long long)g_framerate.model_calls, (unsigned long long)g_framerate.model_replays,
+            LOG("frame-models: %llu transforms, %llu interpolated, %llu discontinuities\n", (unsigned long long)g_framerate.model_calls,
                 (unsigned long long)g_framerate.model_blends, (unsigned long long)g_framerate.model_jumps);
-        LOG("frame-model-preparation: %llu native render preparations (including held-pose refreshes)\n",
+        LOG("frame-model-preparation: %llu native per-view render preparations\n",
             (unsigned long long)g_framerate.model_prepares);
         g_framerate.model_prepares = 0;
-        g_framerate.model_calls = g_framerate.model_blends = g_framerate.model_jumps = g_framerate.model_replays = 0;
+        g_framerate.model_calls = g_framerate.model_blends = g_framerate.model_jumps = 0;
         if (g_framerate.anim_enabled && g_framerate.anim_calls)
             LOG("frame-anims: %llu advances, by %.3f of the game's delta on average\n",
                 (unsigned long long)g_framerate.anim_calls, g_framerate.anim_scale_sum / (double)g_framerate.anim_calls);
@@ -329,86 +369,52 @@ static void build_graph(CPU* c, u64 entry) {
     pm_unlock(&g_framerate.lock);
     g_framerate.build_graph(c, entry);
 }
-static void model_set_mtx(CPU* c, u64 entry);
-static void model_calc(CPU* c, u64 entry);
-/* Refresh held transforms and the model's graphics preparation without repeating
-   its actor/UI owner. Only recently authored models with matching class/skeleton
-   identities qualify; models seen only by preparation have no transform to replay. */
-static void model_replay(CPU* c, u64 frame) {
-    static u64 list[MODEL_SLOTS], contexts[MODEL_SLOTS];
-    static float matrices[MODEL_SLOTS][15];
-    u32 n = 0;
-    pm_lock(&g_framerate.lock);
-    for (u32 i = 0; i < MODEL_SLOTS; i++) {
-        FrameModel* m = &g_framerate.models[i];
-        if (!m->model || !m->tick || !inkypaint_frame_replay_candidate(m->frame, frame) || !m->vtable) continue;
-        if (!readable(m->model, 0x318) || gr64(m->model) != m->vtable ||
-            gr64(m->model + 0x138) != m->skeleton) continue;
-        list[n] = m->model;
-        contexts[n] = m->prepared_frame != frame && readable(m->context, 0x54f4) ? m->context : 0;
-        memcpy(matrices[n], m->current, 48);
-        memcpy(&matrices[n][12], m->current_scale, 12);
-        n++;
+static void input_calc(CPU* c, u64 entry) {
+    if (g_framerate.target && !g_framerate.no_gate && !__atomic_load_n(&g_framerate.simulating, __ATOMIC_RELAXED)) {
+        c->pc = c->x[30];
+        return;
     }
-    pm_unlock(&g_framerate.lock);
-    if (!n) return;
-    int was_replaying = t_frame.replaying;
-    t_frame.replaying = 1;
-    u64 x[31], pc = c->pc, sp = c->x[31];
-    V128 v[32];
-    u32 nzcv[4] = {c->n, c->z, c->cf, c->vf}, fpsr = c->fpsr, fpcr = c->fpcr;
-    memcpy(x, c->x, sizeof x);
-    memcpy(v, c->v, sizeof v);
-    for (u32 i = 0; i < n; i++) {
-        c->x[31] = (sp - 0x100) & ~15ull;
-        u64 data = c->x[31] + 0x80;
-        for (u32 k = 0; k < 15; k++) {
-            u32 bits;
-            memcpy(&bits, &matrices[i][k], 4);
-            gw32(data + k*4, bits);
-        }
-        c->x[0] = list[i];
-        c->x[1] = data;
-        c->x[2] = data + 48;
-        c->x[30] = pc;
-        model_set_mtx(c, MODEL_SET_MTX);
-        if (contexts[i]) {
-            c->x[31] = (sp - 0x100) & ~15ull;
-            c->x[0] = list[i];
-            c->x[1] = contexts[i];
-            c->x[30] = pc;
-            model_calc(c, MODEL_CALC);
-        }
+    g_framerate.input_calc(c, entry);
+}
+/* Phase 1 of the native actor schedule contains both stateful callbacks and
+   frame completion. Keep the latter: skipping the entire phase leaves render
+   eligibility from the wrong native frame and makes models disappear. These
+   three leaves advance actor state (including loading/destruction), so they
+   must share the same fixed-step decision as input, AI and the UI graphs. */
+static void actor_calc2(CPU* c, u64 entry) {
+    unsigned index = entry == ACTOR_AFTER_CALC2 ? 1 : entry == ACTOR_SPECIAL_CALC2 ? 2 : 0;
+    int run = !g_framerate.target || g_framerate.no_gate ||
+              __atomic_load_n(&g_framerate.simulating, __ATOMIC_RELAXED);
+    if (g_framerate.trace) {
+        pm_lock(&g_framerate.lock);
+        if (run) g_framerate.actor_calls[index]++; else g_framerate.actor_skips[index]++;
+        pm_unlock(&g_framerate.lock);
     }
-    memcpy(c->x, x, sizeof x);
-    memcpy(c->v, v, sizeof v);
-    c->x[31] = sp;
-    c->pc = pc;
-    c->n = nzcv[0], c->z = nzcv[1], c->cf = nzcv[2], c->vf = nzcv[3];
-    c->fpsr = fpsr;
-    c->fpcr = fpcr;
-    t_frame.replaying = was_replaying;
-    pm_lock(&g_framerate.lock);
-    g_framerate.model_replays += n;
-    pm_unlock(&g_framerate.lock);
+    if (!run) {
+        c->pc = c->x[30];
+        return;
+    }
+    GuestFn original = index == 1 ? g_framerate.actor_after_calc2 :
+                       index == 2 ? g_framerate.actor_special_calc2 : g_framerate.actor_calc2;
+    original(c, entry);
+}
+/* A UI preview submits its models on fixed UI updates. Native graphics still
+   resets/consumes scene lists on every render. On an extra frame, use GSYS's
+   existing completed-scene path: it retains submissions, removes ineligible
+   actors and refreshes native flags. Never force readiness or reopen/append a
+   closed list. Fixed frames keep ordinary reset/registration and scene lifetime. */
+static void scene_reset(CPU* c, u64 entry) {
+    if (g_framerate.target && !g_framerate.no_gate &&
+        !__atomic_load_n(&g_framerate.simulating, __ATOMIC_RELAXED) &&
+        readable(c->x[0], 0x54c9) && (*(const u8*)GP(c->x[0] + 0x54c8) & 1))
+        c->x[1] = 1;
+    g_framerate.scene_reset(c, entry);
 }
 static void module_calc(CPU* c, u64 entry) {
     pm_lock(&g_framerate.lock);
     g_framerate.module = c->x[0];
-    g_framerate.simulating = 1;
     if (g_framerate.target && !g_framerate.no_gate) {
-        /* INKYPAINT_LOGIC_HZ=30 slows the game to half speed so that every other frame is an extra one: the
-           extra frames' problems show at once instead of a few times a minute */
-        u64 now = guest_ns();
-        if (g_framerate.logic_hz) now = now / 60 * g_framerate.logic_hz;
-        InkypaintFrameSample sample = inkypaint_frame_sample(&g_framerate.clock, now);
-        if (g_framerate.max_steps && sample.steps > g_framerate.max_steps) sample.steps = g_framerate.max_steps;
-        g_framerate.sampled_frames++;
-        g_framerate.logic_steps += sample.steps;
-        g_framerate.extra_frames += sample.steps == 0;
-        g_framerate.discarded_steps += sample.discarded;
-        g_framerate.sample = sample;
-        g_framerate.simulating = sample.steps > 0;
+        InkypaintFrameSample sample = g_framerate.sample;
         /* Preserve the native graph joins and six-step catch-up path. An extra render frame still builds the
            graphs, but their registered simulation callbacks return without advancing the game. */
         gw32(c->x[0] + 0x4fc, sample.steps ? sample.steps : 1);
@@ -439,7 +445,7 @@ static int camera_sample(u64 object, u32 index, u64 projection, u64 source, floa
     FrameCamera* oldest = &g_framerate.cameras[0];
     for (u32 i = 0; i < sizeof g_framerate.cameras / sizeof *g_framerate.cameras; i++) {
         FrameCamera* slot = &g_framerate.cameras[i];
-        if (slot->object == object && slot->index == index && slot->projection == projection) camera = slot;
+        if (slot->object == object && slot->index == index) camera = slot;
         if (slot->frame < oldest->frame) oldest = slot;
     }
     if (!camera) {
@@ -447,7 +453,6 @@ static int camera_sample(u64 object, u32 index, u64 projection, u64 source, floa
         memset(camera, 0, sizeof *camera);
         camera->object = object;
         camera->index = index;
-        camera->projection = projection;
     }
     if (camera->projection_hash != hash || sample.reset || camera->frame + 1 < now_frame ||
         camera->tick > sample.tick || camera->tick + 1 < sample.tick) camera->history = 0;
@@ -525,14 +530,14 @@ static void model_set_mtx(CPU* c, u64 entry) {
     FrameModel* m = find_model(c->x[0]);
     g_framerate.model_calls++;
     u64 vtable = readable(c->x[0], 8) ? gr64(c->x[0]) : 0;
-    if (m->vtable != vtable || m->frame + 8 < frame || m->tick > sample.tick) {
+    u64 skeleton = readable(c->x[0], 0x140) ? gr64(c->x[0] + 0x138) : 0;
+    if (m->vtable != vtable || m->skeleton != skeleton || m->frame + 8 < frame || m->tick > sample.tick) {
         m->history = 0;
         m->tick = 0;
-        m->context = m->prepared_frame = 0;
     }
     m->vtable = vtable;
-    m->skeleton = readable(c->x[0], 0x140) ? gr64(c->x[0] + 0x138) : 0;
-    int capture = !t_frame.replaying && inkypaint_frame_capture(sample.steps, m->tick != 0);
+    m->skeleton = skeleton;
+    int capture = inkypaint_frame_capture(sample.steps, m->tick != 0);
     if (capture && m->tick != sample.tick) {
         /* a new step: its transform becomes the current one, the last one the previous, if they're consecutive */
         m->history = m->tick && m->tick + 1 == sample.tick && !sample.reset && m->frame + 8 >= frame;
@@ -574,35 +579,15 @@ static void model_set_mtx(CPU* c, u64 entry) {
     g_framerate.model_set_mtx(c, entry);
     c->x[31] = sp;
 }
-/* Called by native GSYS as well as the held-pose replay. Never replay a whole
-   actor/UI callback: this method has no input, networking or gameplay updates.
-   The scene owns context throughout a no-step frame; simulation cannot retire it
-   while its actor/UI callbacks are held. Normal native calls refresh it next tick. */
+/* GSYS owns buffer rotation and native render preparation per invocation.
+   Never replay a saved render context or deduplicate by simulation tick/model.
+   Different views/buffer rotations can legitimately prepare the same model in
+   one render. Animation's own time hook handles zero elapsed time. */
 static void model_calc(CPU* c, u64 entry) {
-    if (!g_framerate.target || !g_framerate.model_replay) {
-        g_framerate.model_calc(c, entry);
-        return;
-    }
     pm_lock(&g_framerate.lock);
-    InkypaintFrameSample sample = t_frame.owner ? t_frame.sample : g_framerate.sample;
-    u64 frame = t_frame.owner ? t_frame.frame : g_framerate.frame_serial;
-    FrameModel* m = find_model(c->x[0]);
-    u64 vt = readable(c->x[0], 0x140) ? gr64(c->x[0]) : 0;
-    u64 skeleton = vt ? gr64(c->x[0] + 0x138) : 0;
-    int same = m->vtable == vt && m->skeleton == skeleton;
-    int duplicate = !sample.steps && same && m->prepared_frame == frame;
-    if (!same) {
-        memset(m, 0, sizeof *m);
-        m->model = c->x[0];
-        m->vtable = vt;
-        m->skeleton = skeleton;
-    }
-    m->context = c->x[1];
-    m->prepared_frame = frame;
-    if (!duplicate) g_framerate.model_prepares++;
+    g_framerate.model_prepares++;
     pm_unlock(&g_framerate.lock);
-    if (duplicate) c->pc = c->x[30];
-    else g_framerate.model_calc(c, entry);
+    g_framerate.model_calc(c, entry);
 }
 static float float_argument(CPU* c, u32 index) {
     u32 bits = SNX_VS(c->v[index], 0);
@@ -640,18 +625,28 @@ static void anim_advance(CPU* c, u64 entry) {
     }
     g_framerate.anim_advance(c, entry);
 }
-/* GameGfx also retires render resources and updates render queues. Those operations run every render frame.
-   Its visual-time counter is integer ticks at 60 Hz, so an extra render frame must not increment that counter. */
+/* This counter is also consumed by render work. Repeating it on an extra frame
+   can reuse the previous render's prepared state. Leave the native render serial
+   alone and publish fixed-clock visual time independently instead. The store at
+   93645e4 enqueues this parameter by address for GSYS's later uniform upload. */
 static void game_gfx_calc(CPU* c, u64 entry) {
-    if (!g_framerate.target || g_framerate.no_gfx_hold || !t_frame.owner || t_frame.sample.steps) {
-        g_framerate.game_gfx_calc(c, entry);
-        return;
-    }
-    u64 counter = c->x[0] + 0x470;
-    u32 before = gr32(counter);
-    gw32(counter, before - 1);
     g_framerate.game_gfx_calc(c, entry);
-    gw32(counter, before);
+    if (!g_framerate.target || g_framerate.no_gfx_hold || !t_frame.owner) return;
+    u64 slot = readable(GSYS_GLOBAL_SLOT, 8) ? gr64(GSYS_GLOBAL_SLOT) : 0;
+    u64 global = readable(slot, 8) ? gr64(slot) : 0;
+    if (readable(global, 0xc38)) {
+        float seconds = ((float)(t_frame.sample.tick - 1) + t_frame.sample.alpha) / 60.f;
+        u32 bits;
+        memcpy(&bits, &seconds, sizeof bits);
+        gw32(global + 0xc34, bits);
+    }
+}
+/* The graphics effect's phase calculation takes a 60 Hz tick value, not the
+   native render serial passed by GameGfx. It has no gameplay/input updates. */
+static void gfx_visual_calc(CPU* c, u64 entry) {
+    if (g_framerate.target && !g_framerate.no_gfx_hold && t_frame.owner)
+        c->x[1] = (u32)t_frame.sample.tick;
+    g_framerate.gfx_visual_calc(c, entry);
 }
 static void actor_schedule(CPU* c, u64 entry) {
     /* an extra frame (no simulation step due) of the Actor module job: phase 1 alone, never the simulation's phase 0 */
@@ -668,10 +663,27 @@ static void actor_schedule(CPU* c, u64 entry) {
 }
 static void camera_view(CPU* c, u64 entry) {
     float view[12];
+    int scene = entry == SCENE_CAMERA_VIEW;
+    GuestFn original = scene ? g_framerate.scene_camera_view : g_framerate.camera_view;
     float z_near = float_argument(c, 0), fovy = float_argument(c, 2), aspect = float_argument(c, 3);
-    if (z_near <= 0 || z_near >= 1 || fovy <= 0 || fabsf(aspect - 16.f/9.f) > .001f ||
-        !camera_sample(c->x[0], (u32)c->x[1], c->x[3], c->x[2], view)) {
-        g_framerate.camera_view(c, entry);
+    pm_lock(&g_framerate.lock);
+    u64 inputs = ++g_framerate.camera_inputs;
+    pm_unlock(&g_framerate.lock);
+    if (g_framerate.trace && inputs <= 3)
+        LOG("frame-camera-input: entry=%llx near=%g fovy=%g aspect=%g object=%llx index=%llu source=%llx projection=%llx\n",
+            (unsigned long long)entry, z_near, fovy, aspect, (unsigned long long)c->x[0], (unsigned long long)c->x[1],
+            (unsigned long long)c->x[2], (unsigned long long)c->x[3]);
+    if (g_framerate.trace && inputs <= 3 && readable(c->x[2], 48)) {
+        float m[12];
+        memcpy(m, GP(c->x[2]), sizeof m);
+        LOG("frame-camera-matrix: %g %g %g %g; %g %g %g %g; %g %g %g %g\n",
+            m[0],m[1],m[2],m[3],m[4],m[5],m[6],m[7],m[8],m[9],m[10],m[11]);
+    }
+    /* UI previews and world views both need fresh render entries. Projection
+       changes and the rigid-matrix checks handle cuts; near=1 is not a reliable
+       UI discriminator, and excluded valid world cameras. */
+    if (!camera_sample(c->x[0], (u32)c->x[1], c->x[3], c->x[2], view)) {
+        original(c, entry);
         return;
     }
     /* A stack input copy leaves the simulation camera unchanged. The native routine copies all 48 input bytes
@@ -684,7 +696,39 @@ static void camera_view(CPU* c, u64 entry) {
         memcpy(&bits, &view[i], 4);
         gw32(c->x[2] + i*4, bits);
     }
-    g_framerate.camera_view(c, entry);
+    original(c, entry);
+    c->x[31] = sp;
+}
+/* The primary render-info path used by world and UI models takes a descriptor
+   referring to an existing ViewInfo, rather than separate camera arguments. */
+static void render_camera_view(CPU* c, u64 entry) {
+    u64 object = c->x[0], descriptor = c->x[1];
+    if (!readable(object, 0x440) || !readable(descriptor, 32)) {
+        g_framerate.render_camera_view(c, entry);
+        return;
+    }
+    u64 source = gr64(descriptor + 0x18), group = gr64(object + 0x438);
+    u32 index = *(const u8*)GP(descriptor + 8);
+    if (!readable(source, 0x164) || !readable(group, 0x28) || index >= gr32(group + 0x18)) {
+        g_framerate.render_camera_view(c, entry);
+        return;
+    }
+    pm_lock(&g_framerate.lock);
+    g_framerate.camera_inputs++;
+    pm_unlock(&g_framerate.lock);
+    float view[12];
+    if (!camera_sample(object, index, source + 0xc0, source, view)) {
+        g_framerate.render_camera_view(c, entry);
+        return;
+    }
+    u64 sp = c->x[31], data = (sp - 0x200) & ~15ull;
+    c->x[31] = data;
+    memcpy(GP(data), GP(source), 0x164);
+    memcpy(GP(data), view, sizeof view);
+    memcpy(GP(data + 0x180), GP(descriptor), 32);
+    gw64(data + 0x198, data);
+    c->x[1] = data + 0x180;
+    g_framerate.render_camera_view(c, entry);
     c->x[31] = sp;
 }
 static GuestFn hook(u64 a, GuestFn wrapper) {
@@ -700,7 +744,7 @@ void inkypaint_framerate_init(void) {
     /* Smooth motion follows a numeric high-refresh cap; the environment can override it for diagnostics. */
     char* target_end = NULL;
     long render_hz = target ? strtol(target, &target_end, 10) : 0;
-    int explicit_target = target && target_end != target && !*target_end && render_hz > 60 && render_hz <= 240;
+    int explicit_target = target && target_end != target && !*target_end && render_hz >= 60 && render_hz <= 240;
     int requested = explicit_target || g_settings.smooth_motion;
     if ((!tracing && !requested) || inkypaint_any_title() ||
         g_hle.kernel.title_id != INKYPAINT_TITLE_ID) return;
@@ -722,7 +766,8 @@ void inkypaint_framerate_init(void) {
     }
     int configured_hz = __atomic_load_n(&g_opt_fps, __ATOMIC_RELAXED);
     g_framerate.target = requested ? explicit_target ? (int)render_hz :
-        configured_hz > 60 && configured_hz <= 240 ? configured_hz : 120 : 0;
+        inkypaint_frame_render_cap(configured_hz) : 0;
+    __atomic_store_n(&g_framerate.simulating, 1, __ATOMIC_RELAXED);
     const char* comparison = getenv("INKYPAINT_CAMERA_COMPARE");
     g_framerate.camera_enabled = !comparison || strcmp(comparison, "off");
     /* Bisection of the plaza's horizontal line, one part of the experiment left native each:
@@ -767,19 +812,45 @@ void inkypaint_framerate_init(void) {
     g_framerate.frame = hook(FRAME, frame);
     g_framerate.calc = hook(CALC, calc);
     if (requested) {
+        if (gr32(INPUT_CALC) != 0xa9bc7bfd || gr32(INPUT_CALC + 0x40) != 0xd63f0100)
+            fatal("Smooth motion: controller update hook does not match this executable");
+        g_framerate.input_calc = hook(INPUT_CALC, input_calc);
+        if (!g_framerate.input_calc) fatal("Could not install controller update hook");
+        if (gr32(SCENE_RESET) != 0xa9bc7bfd)
+            fatal("Smooth motion: scene frame hook does not match this executable");
+        g_framerate.scene_reset = hook(SCENE_RESET, scene_reset);
+        if (!g_framerate.scene_reset) fatal("Could not install scene frame hook");
         g_framerate.camera_view = hook(CAMERA_VIEW, camera_view);
+        if (gr32(SCENE_CAMERA_VIEW) != 0x394b2008)
+            fatal("Smooth motion: scene camera hook does not match this executable");
+        g_framerate.scene_camera_view = hook(SCENE_CAMERA_VIEW, camera_view);
+        if (!g_framerate.scene_camera_view) fatal("Could not install scene camera hook");
+        if (gr32(RENDER_CAMERA_VIEW) != 0x6db92beb)
+            fatal("Smooth motion: render camera hook does not match this executable");
+        g_framerate.render_camera_view = hook(RENDER_CAMERA_VIEW, render_camera_view);
+        if (!g_framerate.render_camera_view) fatal("Could not install render camera hook");
         g_framerate.game_gfx_calc = hook(GAME_GFX_CALC, game_gfx_calc);
-        /* on by default: without it an extra frame has no actor work and flashes (2026-10-26 bisection) */
-        /* opt-in since it turned out to be actor logic: split mode's per-frame phase (mask 2) is a step's at 60 FPS,
-           so running it on extra frames ran the actors (moving, shooting, swimming, hair physics) at the frame rate */
-        g_framerate.actor_render = getenv("INKYPAINT_ACTOR_RENDER") && !strcmp(getenv("INKYPAINT_ACTOR_RENDER"), "1");
+        if (gr32(GFX_VISUAL_CALC) != 0xf9450808)
+            fatal("Smooth motion: graphics visual-time hook does not match this executable");
+        g_framerate.gfx_visual_calc = hook(GFX_VISUAL_CALC, gfx_visual_calc);
+        if (!g_framerate.gfx_visual_calc) fatal("Could not install graphics visual-time hook");
+        /* Native setup runs per render, but its mixed actor phase is split at
+           the stateful leaves rather than repeating gameplay on extra frames. */
+        const char* actor = getenv("INKYPAINT_ACTOR_RENDER");
+        g_framerate.actor_render = !actor || strcmp(actor, "0");
         if (g_framerate.actor_render) {
-            /* code only: the vtable is data, which the game's own start-up relocates after this runs */
-            if (gr32(ACTOR_SCHEDULE) != 0xd10583ff || gr32(0xccdc630ull) != 0xd10203ff)
-                fatal("INKYPAINT_ACTOR_RENDER: the actor hooks do not match this executable");
+            if (gr32(ACTOR_SCHEDULE) != 0xd10583ff || gr32(0xccdc630ull) != 0xd10203ff ||
+                gr32(ACTOR_CALC2) != 0xd10183ff || gr32(ACTOR_AFTER_CALC2) != 0xd10143ff ||
+                gr32(ACTOR_SPECIAL_CALC2) != 0xa9bc7bfd)
+                fatal("Smooth motion: actor phase hooks do not match this executable");
             g_framerate.actor_schedule = hook(ACTOR_SCHEDULE, actor_schedule);
-            if (!g_framerate.actor_schedule) fatal("Could not install the actor schedule hook");
-            LOG("framerate: the Actor module job runs on extra frames, with actor phase 1 alone\n");
+            g_framerate.actor_calc2 = hook(ACTOR_CALC2, actor_calc2);
+            g_framerate.actor_after_calc2 = hook(ACTOR_AFTER_CALC2, actor_calc2);
+            g_framerate.actor_special_calc2 = hook(ACTOR_SPECIAL_CALC2, actor_calc2);
+            if (!g_framerate.actor_schedule || !g_framerate.actor_calc2 ||
+                !g_framerate.actor_after_calc2 || !g_framerate.actor_special_calc2)
+                fatal("Could not install the actor phase hooks");
+            LOG("framerate: native actor frame setup, with stateful actor callbacks fixed at 60 Hz\n");
         }
         g_framerate.model_enabled = !getenv("INKYPAINT_MODEL_INTERP") || strcmp(getenv("INKYPAINT_MODEL_INTERP"), "0");
         if (g_framerate.model_enabled) {
@@ -787,13 +858,13 @@ void inkypaint_framerate_init(void) {
                 fatal("INKYPAINT_MODEL_INTERP: the model hook does not match this executable");
             if (gr32(MODEL_CALC) != 0xd10103ff || gr32(MODEL_CALC + 0x104) != 0x97ffaef5)
                 fatal("Smooth motion: the model preparation hook does not match this executable");
-            g_framerate.model_calc = hook(MODEL_CALC, model_calc);
-            if (!g_framerate.model_calc) fatal("Could not install the model preparation hook");
+            if (tracing) {
+                g_framerate.model_calc = hook(MODEL_CALC, model_calc);
+                if (!g_framerate.model_calc) fatal("Could not install the model preparation diagnostic");
+            }
             g_framerate.model_set_mtx = hook(MODEL_SET_MTX, model_set_mtx);
             if (!g_framerate.model_set_mtx) fatal("Could not install the model transform hook");
-            g_framerate.model_replay = !getenv("INKYPAINT_MODEL_REPLAY") || strcmp(getenv("INKYPAINT_MODEL_REPLAY"), "0");
-            LOG("framerate: models' transforms interpolated between steps%s\n",
-                g_framerate.model_replay ? ", and set again on extra frames" : "");
+            LOG("framerate: native model transforms interpolated between fixed steps\n");
         }
         g_framerate.anim_enabled = !getenv("INKYPAINT_ANIM_ADVANCE") || strcmp(getenv("INKYPAINT_ANIM_ADVANCE"), "0");
         if (g_framerate.anim_enabled) {

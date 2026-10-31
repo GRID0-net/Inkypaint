@@ -122,7 +122,7 @@ PageScroll {
                         InkText {
                             kind: "title"
                             text: page.downloading ? "Getting GRID0+'s patches" : ({ idle: "Getting ready", extracting: "Extracting the game", recompiling: "Recompiling for this PC",
-                                     done: "All done", failed: "Preparing stopped" })[prep.phase]
+                                     installingDlc: "Installing optional DLC", done: "All done", failed: "Preparing stopped" })[prep.phase]
                         }
                         InkText {
                             text: page.downloading ? "Downloading them first, so the game is compiled with them once." : prep.detail
@@ -159,7 +159,7 @@ PageScroll {
                         iconText: "▶"
                         onClicked: { prep.reset(); app.refresh(); app.pane = "play" }
                     }
-                    InkButton { visible: prep.phase === "failed"; prominent: true; text: "Try Again"; onClicked: app.prepare() }
+                    InkButton { visible: prep.phase === "failed"; prominent: true; text: "Try Again"; onClicked: prep.installingDlc ? prep.retryDlc() : app.prepare() }
                     InkButton { visible: prep.phase === "failed"; text: "Back"; onClicked: prep.reset() }
                     Item { Layout.fillWidth: true }
                     InkButton { text: details.visible ? "Hide Details" : "Details"; onClicked: details.visible = !details.visible }
@@ -239,6 +239,25 @@ PageScroll {
     }
 
     property string dataMessage: ""
+    GlassCard {
+        visible: app.prepared && !page.showProgress
+        Layout.fillWidth: true
+        ColumnLayout {
+            width: parent.width
+            spacing: 12
+            InkText { text: "DLC (optional)"; kind: "headline" }
+            InkText { text: "Install your own Expansion Pass DLC packages, one at a time. No recompile needed. The base game works without them. DLC gameplay is untested."; kind: "secondary"; Layout.fillWidth: true }
+            FileRow { title: "prod.keys"; hint: "Choose your keys if they are not already available"; path: app.sources.prodKeys; onChoose: page.pick("prodKeys") }
+            FileRow { title: "title.keys"; hint: "Optional; needed for packages that use title keys"; path: app.sources.titleKeys; onChoose: page.pick("titleKeys") }
+            InkButton { text: "Install DLC…"; enabled: !app.playing && app.setupStep === "idle"; onClicked: dlcDialog.open() }
+        }
+    }
+    FileDialog {
+        id: dlcDialog
+        title: "Choose a DLC package"
+        nameFilters: ["Switch packages (*.nsp *.dnsp *.xci *.dxci)", "All files (*)"]
+        onAccepted: app.installDlc(selectedFile.toString())
+    }
     property string slot: ""
     function pick(which) { slot = which; fileDialog.open() }
 

@@ -7,6 +7,9 @@
    busiest written to the log, all of them to calltrace.txt. INKYPAINT_CALL_TRACE_DIRECT=lo-hi[,lo-hi...] (hex) adds
    the direct calls to the functions starting in those ranges, which the runtime then runs as JIT code (keep them
    clear of the frame-rate hooks' functions, which would lose their hooks). A map of the
-   game's own call graph for the frame-rate work. Off without it */
+   game's own call graph for the frame-rate work. INKYPAINT_CALL_TRACE_RANGE uses
+   the same ranges to limit indirect tracing and registry memory.
+   INKYPAINT_CALL_TRACE_OBJECTS=1 groups by first-argument address instead of its
+   vtable (the report column retains its vtable label). Tracing is off by default. */
 void inkypaint_calltrace_init(void);
 #endif

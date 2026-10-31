@@ -5,6 +5,13 @@
 #include <assert.h>
 #include <stdio.h>
 int main(void) {
+    assert(inkypaint_frame_render_cap(60) == 60);
+    assert(inkypaint_frame_render_cap(100) == 100);
+    assert(inkypaint_frame_render_cap(240) == 240);
+    assert(inkypaint_frame_render_cap(0) == 120);
+    assert(inkypaint_frame_render_cap(-1) == 120);
+    assert(inkypaint_frame_render_cap(30) == 120);
+    assert(inkypaint_frame_render_cap(241) == 120);
     const char* logic[] = {"Actor", "ActorAIGroupMgr::SetupJob", "ActorAIGroupMgr::Job", "StartBaseProc", "RunBaseProc",
         "Controller", "ControllerCheck", "GameUIFactory", "GameUIFactory::Update1st", "GameUIFactory::Update2ndMain",
         "GameUIFactory::Update2ndSub1", "GameUIFactory::Update2ndSub2", "GameNet:Recv", "GameNet:Send", "Banc",
@@ -19,10 +26,6 @@ int main(void) {
         assert(!inkypaint_frame_simulation_job(role, "", 0xc7b56f0));
         assert(!inkypaint_frame_simulation_job(role, "", 0x9366800));
     }
-    assert(inkypaint_frame_replay_candidate(9, 10));
-    assert(inkypaint_frame_replay_candidate(10, 10));
-    assert(!inkypaint_frame_replay_candidate(8, 10));
-    assert(!inkypaint_frame_replay_candidate(11, 10));
     assert(!inkypaint_frame_capture(0, 1));
     assert(inkypaint_frame_capture(1, 1));
     assert(inkypaint_frame_capture(0, 0));

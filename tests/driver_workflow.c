@@ -1227,6 +1227,26 @@ int main(int argc, char** argv) {
         run(exe, repo, update, log, 0, "A", NULL);
         run(exe, repo, own, log, 0, "A", NULL);
         run(exe, repo, game_dump, log, 0, "A", NULL); /* the game, played with its checked update */
+        /* The optional installer cannot compile or launch anything, refuses a
+           base/update, and enables a DLC only after its extraction succeeds. */
+        set_env("SNX_WORKFLOW_FLAGS", "--install-dlc");
+        run(exe, repo, game_dump, log, 1, "", "not DLC");
+        run(exe, repo, update, log, 1, "", "not DLC");
+        set_env("SNX_WORKFLOW_FAIL", "E");
+        run(exe, repo, dlc, log, 7, "E", NULL);
+        checked = snx_ini_value(ini, "addons");
+        CHECK(checked && !strcmp(checked, "0100ABCD12340800v65536"));
+        free(checked);
+        set_env("SNX_WORKFLOW_FAIL", "");
+        run(exe, repo, dlc, log, 0, "E", NULL);
+        CHECK(snx_is_file(image));
+        run(exe, repo, dlc, log, 0, "E", NULL); /* refresh an existing image too */
+        checked = snx_ini_value(ini, "addons");
+        CHECK(checked && !strcmp(checked, "0100ABCD12340800v65536,0100ABCD5555A001"));
+        free(checked);
+        CHECK(!snx_remove_tree(image));
+        CHECK(!snx_ini_record(ini, "addons", "0100ABCD12340800v65536"));
+        set_env("SNX_WORKFLOW_FLAGS", "");
         /* a DLC program an older version made, taken away as its dump is played: the game played with it */
         CHECK(!snx_copy_file(exe, old_dlc));
         { /* --out, which the menu passes with Extract dump: a DLC's goes into its own data folder */

@@ -40,7 +40,10 @@ static u64 test_aoc_installed[4];
 FILE* fs_open_read(const char* path, u64* size) {
     char want[64];
     for (size_t i = 0; i < 4 && test_aoc_installed[i]; i++) {
-        snprintf(want, sizeof want, "system/archives/%016llx.romfs", (unsigned long long)test_aoc_installed[i]);
+        /* Both extraction's uppercase names and older lowercase installs must
+           be discovered through the case-sensitive file index. */
+        snprintf(want, sizeof want, i == 0 ? "system/archives/%016llX.romfs" : "system/archives/%016llx.romfs",
+                 (unsigned long long)test_aoc_installed[i]);
         if (!strcmp(path, want)) {
             if (size) *size = 0;
             return tmpfile(); /* any open file, which /dev/null is not on Windows: the scan only closes it */

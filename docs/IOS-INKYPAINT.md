@@ -41,6 +41,15 @@ read-only preflight; **Build IPA** starts the combined pipeline and displays its
 output; **Stop** cancels the owned build session. **Show IPA** reveals the output
 when it finishes. Quitting the helper cancels a running job.
 
+**Include installed DLC** is optional and off by default. Install the DLC packages
+through the desktop launcher's **Game Files → DLC (optional)** first, then select
+that existing installation in the builder. Only enabled, extracted DLC images are
+bundled; desktop settings, dump paths and keys stay on the Mac. The base game can
+be packaged without DLC. DLC gameplay on desktop and iOS remains untested.
+
+For the combined CLI pipeline, opt in with
+`INKY_IOS_INCLUDE_DLC=1 scripts/package-ios-all.sh /path/to/installed/data`.
+
 The CLI also accepts those installed-game locations now. Existing decrypted
 ExeFS/RomFS are reused without extracting dumps again or changing the Mac
 installation. The macOS `_code.so` cannot serve as the iOS game framework:

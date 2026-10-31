@@ -23,6 +23,13 @@ for tool in cmake ninja python3 xcrun tar rg; do
 done
 xcrun --sdk iphoneos --show-sdk-path >/dev/null
 GAME="$(python3 "$ROOT/scripts/resolve-ios-install.py" "$GAME" --path-only)"
+if [ "${INKY_IOS_INCLUDE_DLC:-0}" = 1 ]; then
+    export INKY_IOS_DLC_SOURCE="$GAME"
+    python3 "$ROOT/scripts/stage-ios-assets.py" "$GAME" --check-dlc
+    echo "Optional installed DLC will be included (gameplay untested)."
+else
+    unset INKY_IOS_DLC_SOURCE
+fi
 echo "Using existing game files: $GAME"
 MVK=$(find "$INKY_IOS_MOLTENVK" -path '*/dynamic/*ios-arm64/MoltenVK.framework/MoltenVK' -type f -print -quit)
 [ -n "$MVK" ] || { echo "Missing iPhoneOS MoltenVK framework under $INKY_IOS_MOLTENVK" >&2; exit 1; }

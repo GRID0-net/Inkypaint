@@ -23,6 +23,7 @@
 #endif
 /* play_dump's: the game made and ready, not played (an update's or a DLC's game, before it) */
 #define PLAY_PREPARE 0x10000u
+#define INSTALL_DLC 0x20000u
 /* a game's program file: <name>.exe on Windows, <name> elsewhere */
 #ifdef _WIN32
 #define PROGRAM_SUFFIX ".exe"
@@ -45,6 +46,7 @@ static void usage(void) {
         "  --KEY=VALUE            Any setting of the game's .ini, for this run\n"
         "  --settings[=recompile] List the settings, tab-separated");
     puts("  --update FILE          An update's or a DLC's dump, played or prepared with the game; once each\n"
+         "  --install-dlc FILE     Install optional DLC for an already prepared game, without recompiling or playing\n"
          "  -x -h / -r -h          Extraction / recompilation options\n"
          "  --game=DIR             Play the recompiled game in DIR (recompiled/<title ID>)");
     puts("  --extract-container    Extract the dump into the game's data folder; without it the game reads the dump\n"
@@ -622,6 +624,18 @@ static int play_dump_at(const char* input, const SnxPaths* paths, unsigned flags
     command[2] = paths->repo;
     command[3] = "--build-dir";
     command[4] = paths->build;
+    if (flags & INSTALL_DLC) {
+        SnxU64 title, game;
+        if (out || nupdates || !dump || !snx_is_file(dump) ||
+            snx_extract_title(dump, paths, &title, &game, NULL)) {
+            snx_error("--install-dlc requires a DLC container, without --out or --update");
+            goto done;
+        }
+        if (snx_addon_kind(game, title) != SNX_ADDON_DLC) {
+            snx_error("The selected container is not DLC; choose its add-on content package, not the base or update");
+            goto done;
+        }
+    }
     if (tmpfs && out) {
         snx_error("--out and --tmpfs cannot go together: --tmpfs puts the extraction in tmpfs");
         goto done;
@@ -836,7 +850,21 @@ addon:
         } else if (snx_addon_kind(owner, addon) == SNX_ADDON_DLC) {
             /* recorded and checked, its game's code its own: the game played with it */
             char *data = snx_format("%s_data", base), *program;
-            rc = snx_mkdirs(data) || drop_dlc_program(folder, name) || check_addon(folder, of, name + strlen(of) + 1);
+            rc = snx_mkdirs(data);
+            /* Preparation must finish extraction too: the launcher must not
+               depend on a later play to extract a registered DLC. Only enable
+               it after the image was successfully published. */
+            if (!rc && (flags & INSTALL_DLC)) {
+                char text[17], *made, *marker;
+                snx_title_text(addon, text);
+                made = snx_format("system/archives/%s.romfs", text);
+                marker = snx_format("%s.extracting", base);
+                rc = extract_game(command, source, NULL, data, made, marker, paths);
+                free(made);
+                free(marker);
+            } else if (!rc && extract)
+                rc = ensure_addon(command, folder, name, addon, source, NULL, 1, paths);
+            if (!rc) rc = drop_dlc_program(folder, name) || check_addon(folder, of, name + strlen(of) + 1);
             free(data);
             if (!rc && !(flags & (SNX_RECOMP | PLAY_PREPARE))) {
                 program = game_program(folder, of);
@@ -1154,6 +1182,10 @@ int snx_driver(int argc, char** argv) {
             flags |= SNX_EXTRACT_CONTAINER;
             continue;
         }
+        if (!strcmp(argv[i], "--install-dlc")) {
+            flags |= INSTALL_DLC | SNX_RECOMP | SNX_EXTRACT_CONTAINER;
+            continue;
+        }
         if (!strcmp(argv[i], "--tmpfs")) { /* -r's too, which takes it from rest */
             flags |= SNX_TMPFS;
             rest[n++] = argv[i];
@@ -1206,8 +1238,12 @@ int snx_driver(int argc, char** argv) {
             ++i;
     }
     n = j;
+    if ((flags & INSTALL_DLC) && !input) {
+        result = snx_error("--install-dlc requires a DLC container");
+        goto done;
+    }
     /* a game made already is played or, with -r, recompiled where it is */
-    automatic = input && (!(flags & (SNX_EXTRACT | SNX_RECOMP)) ||
+    automatic = input && ((flags & INSTALL_DLC) || !(flags & (SNX_EXTRACT | SNX_RECOMP)) ||
                           ((flags & SNX_RECOMP) &&
                            (container_path(input) ||
                             (!(flags & SNX_EXTRACT) && (prepared_game(input, NULL, NULL) || addon_program(input))))));

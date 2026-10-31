@@ -9,6 +9,7 @@ final class BuilderModel: ObservableObject {
     @Published var project: String
     @Published var installation: String
     @Published var workers = 8
+    @Published var includeDlc = false
     @Published private(set) var busy = false
     @Published private(set) var status = "Ready"
     @Published private(set) var log = ""
@@ -71,6 +72,7 @@ final class BuilderModel: ObservableObject {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         environment["INKY_JOBS"] = String(workers)
+        environment["INKY_IOS_INCLUDE_DLC"] = includeDlc ? "1" : "0"
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
         let output = Pipe()

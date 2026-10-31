@@ -7,6 +7,9 @@ Windows, Linux, and Apple silicon Macs! the launcher handles extracting your gam
 mods, and signing into GRID0+.
 
 this is specifically for **Splatoon 3 11.3.0**. other games and other updates aren't supported.
+
+dlc is optional! once the game is prepared, go to **Game Files → DLC (optional)** and install your own
+Expansion Pass packages, one at a time. no extra recompile needed. dlc gameplay hasn't been tested yet.
 you'll need your own game dump and your own console's keys, none of that comes with inkypaint.
 
 ## Download

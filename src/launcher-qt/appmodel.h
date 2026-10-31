@@ -59,6 +59,7 @@ public:
     Q_INVOKABLE void play();
     Q_INVOKABLE void stop();
     Q_INVOKABLE void prepare();
+    Q_INVOKABLE void installDlc(const QString& file);
     Q_INVOKABLE void recompile(); // for the GRID0+ patches: the extraction is kept, so it is the recompile alone
     // Setting up asks about online play first: signed in, GRID0+'s patches are downloaded before the recompile, so they
     // are compiled in the first time instead of needing a second recompile after signing in

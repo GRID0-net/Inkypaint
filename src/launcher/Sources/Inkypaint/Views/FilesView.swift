@@ -19,6 +19,9 @@ struct FilesView: View {
                 } else {
                     SetupSteps()
                 }
+                if model.isPrepared && model.preparer.phase == .idle {
+                    OptionalDlcCard()
+                }
             }
             .padding(28)
             .frame(maxWidth: 760)
@@ -281,7 +284,9 @@ private struct PrepareProgress: View {
                             .tint(Ink.lime)
                             .controlSize(.large)
                         } else {
-                            Button("Try Again") { model.prepare() }.buttonStyle(.glassProminent).tint(Ink.purple)
+                            Button("Try Again") {
+                                if p.installingDlc { p.retryDlc() } else { model.prepare() }
+                            }.buttonStyle(.glassProminent).tint(Ink.purple)
                             Button("Back") { p.reset() }.buttonStyle(.glass)
                         }
                         Spacer()
@@ -306,8 +311,51 @@ private struct PrepareProgress: View {
         case .idle: "Getting ready"
         case .extracting: "Extracting the game"
         case .recompiling: "Recompiling for Apple silicon"
+        case .installingDlc: "Installing optional DLC"
         case .done: "All done"
         case .failed: "Preparing stopped"
+        }
+    }
+}
+
+private struct OptionalDlcCard: View {
+    @Environment(AppModel.self) private var model
+    @State private var choosing = false
+    @State private var slot = "dlc"
+    @State private var message = ""
+
+    var body: some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("DLC (optional)").font(.headline)
+                Text("Install your own Expansion Pass DLC packages, one at a time. No recompile needed. The base game works without them. DLC gameplay is untested.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    Button("Choose prod.keys…") { slot = "prodKeys"; choosing = true }
+                    Text(model.sources.prodKeys?.lastPathComponent ?? "Use existing keys")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Choose title.keys…") { slot = "titleKeys"; choosing = true }
+                    Text(model.sources.titleKeys?.lastPathComponent ?? "Optional")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Install DLC…") { slot = "dlc"; choosing = true }
+                    .buttonStyle(.glassProminent).tint(Ink.purple)
+                    .disabled(model.isPlaying || model.setupStep != .idle)
+                if !message.isEmpty { Text(message).foregroundStyle(.orange) }
+            }
+        }
+        .fileImporter(isPresented: $choosing, allowedContentTypes: [.data]) { result in
+            switch result {
+            case .success(let url):
+                if slot == "prodKeys" { model.sources.prodKeys = url }
+                else if slot == "titleKeys" { model.sources.titleKeys = url }
+                else if !model.isPlaying && model.setupStep == .idle {
+                    model.preparer.installDlc(url, sources: model.sources, paths: model.paths)
+                }
+            case .failure(let error): message = error.localizedDescription
+            }
         }
     }
 }
