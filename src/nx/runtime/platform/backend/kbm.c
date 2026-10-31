@@ -103,7 +103,8 @@ static float pitch;                /* degrees the controller is tilted up */
 static float look_x, look_y;
 
 static void look_add(float* at, float d) {
-    float old = __atomic_load_n(at, __ATOMIC_RELAXED), sum;
+    float old, sum;
+    __atomic_load(at, &old, __ATOMIC_RELAXED); /* the generic form: Apple's clang takes _n only on integers and pointers */
     do sum = old + d;
     while (!__atomic_compare_exchange(at, &old, &sum, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 }
