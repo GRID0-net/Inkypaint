@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("contextSettings", &settings);
     QQmlComponent fixture(&engine);
-    fixture.setData("import QtQml\nQtObject { property var settings: contextSettings; property bool prepared: true; property string pane: 'settings' }", QUrl());
+    fixture.setData("import QtQml\nQtObject { property var settings: contextSettings; property bool prepared: true; property bool discordPresence: true; property string pane: 'settings' }", QUrl());
     QScopedPointer<QObject> context(fixture.create()); CHECK(context);
     engine.rootContext()->setContextProperty("app", context.data());
     QStringList problems;
