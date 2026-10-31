@@ -106,6 +106,10 @@ with a temporary settings store and a synthetic prepared-game folder. it doesn't
 arguments. with `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software`, it checks that fallback file and folder
 pickers open using only the packaged QML modules. missing `Qt.labs.folderlistmodel` must fail that test.
 
+## Closing the game with Escape
+
+Started from the launcher, the game does not close when Escape is pressed in its window. The launcher comes to the front instead and asks whether to close the game, and the game keeps running until the player answers Close the game.
+
 ## Discord rich presence
 
 While the launcher is open, Discord shows your friends what you are doing. In the launcher it names the page you are

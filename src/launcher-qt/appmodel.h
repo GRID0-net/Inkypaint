@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QObject>
 #include <QProcess>
+#include <QTimer>
 #include <QUrl>
 
 /// The launcher's state: where the game is, whether it is ready, and the game while it runs (the Mac's AppModel)
@@ -53,6 +54,8 @@ public:
     QDateTime gameStarted() const { return started_; }
     // the runtime's status for the rich presence, beside its log (src/nx/runtime/inkypaint_presence.c)
     QString presenceFile() const;
+    // made by the runtime when Escape is pressed in the game (src/nx/runtime/inkypaint_launcher.c), beside presenceFile()
+    QString quitRequestFile() const;
     QUrl logo() const;
     QString gameName() const { return Game::name; }
     QString gameVersion() const { return Game::version; }
@@ -65,6 +68,8 @@ public:
 
     Q_INVOKABLE void play();
     Q_INVOKABLE void stop();
+    // the answer to quitRequested: true closes the game, false lets it play on (hidden again when hide while playing)
+    Q_INVOKABLE void answerQuit(bool close);
     Q_INVOKABLE void prepare();
     Q_INVOKABLE void installDlc(const QString& file);
     Q_INVOKABLE void recompile(); // for the GRID0+ patches: the extraction is kept, so it is the recompile alone
@@ -86,10 +91,12 @@ signals:
     void changed();
     void minimizeRequested();
     void restoreRequested();
+    void quitRequested(); // Escape in the game: ask whether to close it, then answerQuit
 
 private:
     void ended(int status, QProcess::ExitStatus how);
     bool deployRuntime(QString* error);
+    void pollQuitRequest();
     void setSetupStep(const QString& step);
     void startPrepare(); // prepare, from the start again if the last one ended
     QString pane_ = "play";
@@ -109,4 +116,6 @@ private:
     bool hide_ = true;
     bool discord_ = true;
     bool stopping_ = false; // Quit was asked for: its end is no surprise
+    bool askingQuit_ = false; // quitRequested is waiting for answerQuit: a second request does not ask again
+    QTimer* quitPoll_ = nullptr;
 };

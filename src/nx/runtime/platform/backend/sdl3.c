@@ -25,6 +25,7 @@
 #include "nx/runtime/platform/gamepad.h"
 #include "nx/runtime/platform/kbm.h"
 #include "nx/runtime/inkypaint_ui.h"
+#include "nx/runtime/inkypaint_launcher.h"
 #include "common/utilities/pad_sdl.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1323,7 +1324,8 @@ void video_poll(void) {
                 break;
             case SDL_EVENT_KEY_DOWN:
                 if (e.key.key == SDLK_ESCAPE) { /* a fresh press: the repeats of the Esc that closed the menu don't */
-                    if (!e.key.repeat) g_quit = 1;
+                    /* started by the launcher, the launcher asks first (inkypaint_launcher.c) */
+                    if (!e.key.repeat && !inkypaint_launcher_quit_request()) g_quit = 1;
                     break;
                 }
                 if (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)) {

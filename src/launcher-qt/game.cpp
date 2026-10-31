@@ -76,6 +76,7 @@ bool Bundled::isComplete() {
 }
 QProcessEnvironment Bundled::environment(bool grid0Stdin) {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("INKYPAINT_LAUNCHER"), QStringLiteral("1")); // Escape asks the launcher first
     if (grid0Stdin) env.insert(QStringLiteral("INKYPAINT_GRID0_STDIN"), QStringLiteral("1"));
     return env;
 }
