@@ -115,9 +115,10 @@ Side Order. The runtime writes what the game shows to `<title ID>.presence.json`
 second, and the launcher reads that file every 2 seconds. The runtime's `discord_presence_status` setting turns the
 file off. The switch in Settings turns the whole feature off.
 
-It needs a Discord application, whose ID the build takes from the CMake cache variable `INKYPAINT_DISCORD_APP_ID`
-(`cmake -DINKYPAINT_DISCORD_APP_ID=123456789012345678 ...`). The environment variable of the same name overrides it
-when the launcher starts. Without an ID the launcher never looks for Discord. When Discord is not running it tries
+It uses inkypaint's Discord application, whose ID is the default of the CMake cache variable
+`INKYPAINT_DISCORD_APP_ID` (a fork can use its own with `cmake -DINKYPAINT_DISCORD_APP_ID=123456789012345678 ...`).
+The environment variable of the same name overrides it when the launcher starts. With an empty ID the launcher never
+looks for Discord. When Discord is not running it tries
 again every 15 seconds, so starting Discord later is enough.
 
 To make the application, open the Developer Portal at discord.com/developers/applications, create an application

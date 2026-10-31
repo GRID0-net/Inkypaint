@@ -20,7 +20,7 @@ qt_add_executable(inkypaint WIN32
     presencemodel.cpp presencemodel.h)
 # Discord's rich presence: the application's ID from discord.com/developers (empty, the feature does nothing). The
 # environment's INKYPAINT_DISCORD_APP_ID overrides it at run time
-set(INKYPAINT_DISCORD_APP_ID "" CACHE STRING "Discord application ID for the launcher's rich presence (empty: off)")
+set(INKYPAINT_DISCORD_APP_ID "1566012059571982356" CACHE STRING "Discord application ID for the launcher's rich presence (empty: off)")
 target_compile_definitions(inkypaint PRIVATE INKYPAINT_DISCORD_APP_ID="${INKYPAINT_DISCORD_APP_ID}")
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(inkypaint
