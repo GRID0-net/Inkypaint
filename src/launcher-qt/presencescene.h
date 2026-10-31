@@ -34,6 +34,7 @@ struct LauncherState {
     QString phase;             // the Preparer's: idle, extracting, recompiling, installingDlc, done, failed
     double fraction = 0;       // the preparation's, 0 to 1
     bool playing = false;      // the game's process is running
+    bool online = false;       // it runs with the GRID0+ sign-in
     GameStatus game;
     qint64 launcherStart = 0;  // seconds since 1970
     qint64 gameStart = 0;

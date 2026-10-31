@@ -52,6 +52,7 @@ public:
     void setDiscordPresence(bool on);
     qint64 gamePid() const { return game_ ? game_->processId() : 0; }
     QDateTime gameStarted() const { return started_; }
+    bool gameOnline() const { return gameOnline_; } // this run was started with the GRID0+ sign-in
     // the runtime's status for the rich presence, beside its log (src/nx/runtime/inkypaint_presence.c)
     QString presenceFile() const;
     // made by the runtime when Escape is pressed in the game (src/nx/runtime/inkypaint_launcher.c), beside presenceFile()
@@ -115,6 +116,7 @@ private:
     QString lastExit_;
     bool hide_ = true;
     bool discord_ = true;
+    bool gameOnline_ = false; // the running game got the GRID0+ password: it plays online
     bool stopping_ = false; // Quit was asked for: its end is no surprise
     bool askingQuit_ = false; // quitRequested is waiting for answerQuit: a second request does not ask again
     QTimer* quitPoll_ = nullptr;

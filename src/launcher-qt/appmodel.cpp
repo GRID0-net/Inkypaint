@@ -222,6 +222,7 @@ void AppModel::play() {
     // online, the game signs in to GRID0+ itself: the password goes on its stdin, never on its command line or in the
     // game's settings
     QString password = online_.passwordForGame();
+    gameOnline_ = !password.isNull();
     QFile::remove(quitRequestFile()); // a request left by an earlier run is not this one's
     askingQuit_ = false;
     game_ = new QProcess(this);
@@ -267,6 +268,7 @@ void AppModel::stop() {
 }
 
 void AppModel::ended(int status, QProcess::ExitStatus how) {
+    gameOnline_ = false;
     qint64 ran = started_.isValid() ? started_.secsTo(QDateTime::currentDateTime()) : 0;
     game_->deleteLater();
     game_ = nullptr;

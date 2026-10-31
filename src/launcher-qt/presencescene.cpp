@@ -108,7 +108,7 @@ DiscordIpc::Activity describe(const LauncherState& s) {
     DiscordIpc::Activity a;
     if (s.playing) {
         a.start = s.gameStart;
-        a.largeText = QStringLiteral("Splatoon 3 on inkypaint");
+        a.largeText = QStringLiteral("Splatoon 3 on Inkypaint");
         if (s.game.known) {
             SceneText t = describeScene(s.game.scene, s.game.content, s.game.rule, s.game.mode, s.game.stageId);
             a.details = t.details;
@@ -120,6 +120,11 @@ DiscordIpc::Activity describe(const LauncherState& s) {
             a.state = QStringLiteral("Loading the game");
         } else { // no status from the runtime (its discord_presence_status off, or an older runtime)
             a.details = QStringLiteral("Playing Splatoon 3");
+        }
+        if (s.online) { // the second line has room: its own words when empty, else added to the scene's
+            a.largeText = QStringLiteral("Splatoon 3 on Inkypaint, online with GRID0+");
+            a.state = a.state.isEmpty() ? QStringLiteral("Online with GRID0+")
+                                        : a.state + QStringLiteral(" \u00b7 GRID0+");
         }
         return a;
     }

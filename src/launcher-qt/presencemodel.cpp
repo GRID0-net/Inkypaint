@@ -40,6 +40,7 @@ void PresenceModel::update() {
     s.phase = app_->preparer()->phase();
     s.fraction = app_->preparer()->fraction();
     s.playing = app_->playing();
+    s.online = app_->gameOnline();
     s.launcherStart = launcherStart_;
     s.now = QDateTime::currentSecsSinceEpoch();
     s.gameStart = app_->gameStarted().isValid() ? app_->gameStarted().toSecsSinceEpoch() : s.now;
