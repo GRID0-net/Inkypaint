@@ -24,6 +24,7 @@
 #include "common/utilities/game_ini.h"
 #include "common/utilities/mods.h"
 #include "common/utilities/patches.h"
+#include "nx/runtime/inkypaint_heapscale.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -293,6 +294,7 @@ static void mods_open(void) {
     char *folder = snx_mods_folder(g_datadir), *stamp = snx_mods_stamp(folder, g_settings.game_mods_off), **romfs;
     char path[sizeof g_exedir + sizeof g_exename + 8], *built, *recorded;
     size_t count, i, size = 0;
+    inkypaint_heapscale_graft(); /* the heap budgets of a larger render scale, laid under the mods */
     snprintf(path, sizeof path, "%s%s.abi", g_exedir, g_exename);
     built = (char*)snx_read_file(path, &size);
     recorded = built ? strstr(built, " mods ") : NULL;
@@ -996,7 +998,8 @@ void romfs_init(void) {
         if (fs_tree_lookup(&g_hle.fs.tree, NULL, "exefs/main.nro", &node))
             WARN("Extract the game's RomFS into %sromfs/ before running it\n", g_datadir);
     }
-    if (!folder && !g_hle.fs.nmromfs) {
+    FsNode* heaps = fs_tree_lookup(&g_hle.fs.tree, NULL, INKYPAINT_HEAPSCALE_LAYER, &node) ? NULL : node;
+    if (!folder && !g_hle.fs.nmromfs && !heaps) {
         pm_unlock(&g_hle.fs.tree.lock);
         return;
     }
@@ -1009,6 +1012,7 @@ void romfs_init(void) {
         pm_unlock(&g_hle.fs.tree.lock);
         return;
     }
+    if (heaps) rnode_lay(root, heaps);
     for (i = 0; i < g_hle.fs.nmromfs; i++) {
         char name[32];
         snprintf(name, sizeof name, "mods.%u", (unsigned)i);
@@ -1019,6 +1023,9 @@ void romfs_init(void) {
         snprintf(what, sizeof what, "the game's RomFS and %u mods' over it", (unsigned)g_hle.fs.nmromfs);
         g_hle.fs.rlayered = 1;
         romfs_build(root, what);
+    } else if (heaps) {
+        g_hle.fs.rlayered = 1;
+        romfs_build(root, "the game's RomFS and inkypaint's graphics heap budgets over it");
     } else
         romfs_build(root, "romfs/");
     rnode_free(root);

@@ -48,7 +48,7 @@ const QVariantList& catalog() {
                            "Widens the world to the window, the interface stays 16:9.", "toggle", "1", true),
                    setting("language", "Display", "Game language", "", "choice", "1", true, languages)}),
             group("Graphics", "graphics",
-                  {setting("resolution", "Graphics", "Resolution", "Scale the 3D scene, keeping the interface at its normal resolution. 1× follows the game.",
+                  {setting("resolution", "Graphics", "Resolution", "Scale the 3D scene, keeping the interface at its normal resolution. 1× follows the game. Above 1× the game gets more graphics memory and uses at least 6 GB of memory.",
                            "choice", "1", true,
                            {option("0.25", "0.25×"), option("0.5", "0.5×"), option("0.75", "0.75×"), option("1", "1× (console)"),
                             option("1.5", "1.5×"), option("2", "2×"), option("3", "3×"), option("4", "4×")}),

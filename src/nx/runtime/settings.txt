@@ -176,6 +176,7 @@ setting Resolution scale
     default 1
     startup
     help Scene render scale, 0.25 to 4. With the engine quality hooks, the UI and GPU data textures keep their normal size
+    help Above 1 the game gets larger graphics heaps and at least 6 GB of memory (memory_gb), 8 GB above 2
 setting Dynamic resolution
     key dynamic_resolution
     int 0 1

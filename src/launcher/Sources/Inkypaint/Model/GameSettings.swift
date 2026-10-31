@@ -74,7 +74,7 @@ enum SettingsCatalog {
         ]),
         SettingGroup(title: "Graphics", symbol: "paintbrush.pointed", settings: [
             SettingDef(key: "resolution", section: "Graphics", title: "Resolution",
-                       detail: "Scale the 3D scene, keeping the interface at its normal resolution. 1× follows the game.",
+                       detail: "Scale the 3D scene, keeping the interface at its normal resolution. 1× follows the game. Above 1× the game gets more graphics memory and uses at least 6 GB of memory.",
                        kind: .choice([("0.25", "0.25×"), ("0.5", "0.5×"), ("0.75", "0.75×"), ("1", "1× (console)"),
                                       ("1.5", "1.5×"), ("2", "2×"), ("3", "3×"), ("4", "4×")]),
                        defaultValue: "1", nextLaunch: true),
