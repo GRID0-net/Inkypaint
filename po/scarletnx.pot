@@ -4130,6 +4130,22 @@ msgid "The threads compiling the game's code when it is recompiled: 0 = one for 
 msgstr ""
 
 #: src/nx/runtime/settings.txt
+msgid "Fast pipeline"
+msgstr ""
+
+#: src/nx/runtime/settings.txt
+msgid "At -O2, the recompiler's own short list of LLVM passes in place of LLVM's -O2 pipeline: half the compile time, and code that ran as fast or faster in its tests. Off, LLVM's -O2 as it is. A game made already keeps its code until it is recompiled"
+msgstr ""
+
+#: src/nx/runtime/settings.txt
+msgid "Big function size"
+msgstr ""
+
+#: src/nx/runtime/settings.txt
+msgid "Functions of more instructions than this are optimized at O1 when the rest is optimized more, each in a unit of its own: LLVM's O2 passes (value numbering, the SLP vectorizer) take time that grows faster than a function's size, and a handful of giant functions took a quarter of one game's compile. 0 = every function at the optimization level"
+msgstr ""
+
+#: src/nx/runtime/settings.txt
 msgid "Unit cache limit"
 msgstr ""
 

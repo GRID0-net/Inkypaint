@@ -435,11 +435,8 @@ static void take_candidates(void) {
     tex_take_drawn(&texture);
     CHECK(g_vk_hot.take_static == unchanged + 1);
 
-    u32 set = ((uintptr_t)&texture >> 6) & (TAKE_SETS - 1);
-    int found = 0;
-    for (unsigned i = 0; i < TAKE_WAYS; i++)
-        if (g_take_cache.entries[set][i].texture == &texture) { CHECK(g_take_cache.entries[set][i].count == 1); found = 1; }
-    CHECK(found);
+    /* the candidates are kept with the texture: one target, found once */
+    CHECK(texture.take_valid && texture.take_count == 1 && texture.take_targets);
     Surf volume = texture, wide = source[0];
     volume.type = VK_IMAGE_VIEW_TYPE_3D;
     wide.w = 128;
@@ -449,7 +446,7 @@ static void take_candidates(void) {
     take_generation++; /* new target, parking, or unparking */
     tex_take_drawn(&texture);
     CHECK(take_queries == before + 4);
-    g_vk_surf_epoch++; /* destruction/address reuse */
+    take_generation++; /* destruction or address reuse: a freed target leaves the drawn list (surf_free), which moves the generation */
     tex_take_drawn(&texture);
     CHECK(take_queries == before + 6);
     take_count = 0;
@@ -457,7 +454,9 @@ static void take_candidates(void) {
     tex_take_drawn(&texture);
     tex_take_drawn(&texture);
     CHECK(take_queries == before + 7); /* negative candidates cached too */
-    memset(&g_take_cache, 0, sizeof g_take_cache);
+    free(texture.take_targets); /* the texture kept its candidates */
+    texture.take_targets = NULL;
+    texture.take_valid = 0;
 }
 
 int main(void) {
