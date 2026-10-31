@@ -17,7 +17,7 @@ int main(void) {
         "GameUIFactory::Update2ndSub1", "GameUIFactory::Update2ndSub2", "GameNet:Recv", "GameNet:Send", "Banc",
         "Event", "Camera", "SoundModule", "Scene", "GameFrame", "Physics", "", "UnclassifiedNewModule"};
     const char* graphics[] = {"Graphics", "Resource", "GameGfx", "GameGfx:PostActorCalc", "GameGfx:UpdateDynamicLight",
-        "EntryJobsBgGraphics", "GameCamera"};
+        "EntryJobsBgGraphics", "GameCamera", "Effect", "GameVfx", "XLink"};
     for (unsigned role = 0x4c8; role <= 0x4e0; role += 8) {
         for (unsigned i = 0; i < sizeof logic / sizeof *logic; i++)
             assert(inkypaint_frame_simulation_job(role, logic[i], 0xcda24e0));

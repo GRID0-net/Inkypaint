@@ -23,6 +23,11 @@ static inline int inkypaint_frame_simulation_job(uint32_t role, const char* name
        frame, everything that moves (the reticle, the player, the ink) was drawn twice, a bright copy and a faint one.
        Run on every frame it ends that. The player's hair then trails the head while moving (not understood yet). */
     if (!strcmp(name, "GameCamera")) return 0;
+    /* The particle effects (steam, ink, footsteps): one frame in which the player moved near a steam object showed a blue
+       wash over the whole 3D scene (the HUD untouched), with fog-like blobs. Their jobs skipped on a render-only frame, a
+       particle spawned in the step was drawn in the next frame before its data existed. Run on every frame, the flash is
+       gone (the player's own test, and a capture of 13 of them before it). */
+    if (!strcmp(name, "Effect") || !strcmp(name, "GameVfx") || !strcmp(name, "XLink")) return 0;
     return 1;
 }
 /* Only a simulation sample may replace the authoritative interpolation endpoint.
