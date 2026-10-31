@@ -19,6 +19,10 @@ static inline int inkypaint_frame_simulation_job(uint32_t role, const char* name
     if (!strcmp(name, "Graphics") || !strcmp(name, "Resource") || !strcmp(name, "GameGfx") ||
         !strcmp(name, "GameGfx:PostActorCalc") || !strcmp(name, "GameGfx:UpdateDynamicLight") ||
         !strcmp(name, "EntryJobsBgGraphics")) return 0;
+    /* GameCamera solves the camera pose and effects the renderer's temporal reprojection reads. Skipped on a render-only
+       frame, everything that moves (the reticle, the player, the ink) was drawn twice, a bright copy and a faint one.
+       Run on every frame it ends that. The player's hair then trails the head while moving (not understood yet). */
+    if (!strcmp(name, "GameCamera")) return 0;
     return 1;
 }
 /* Only a simulation sample may replace the authoritative interpolation endpoint.
