@@ -19,6 +19,7 @@
 #include "snx_settings.h"
 #include <SDL3/SDL.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define BINDINGS   4      /* inputs a control takes */
@@ -263,6 +264,15 @@ u64 kbm_buttons(void) {
             }
     for (int w = 0; w < 2; w++)
         if (wheel_left[w] > 0) wheel_left[w]--;
+    {
+        /* INKYPAINT_KBM_TRACE=1: each change of the buttons the keys make, for finding why a key does nothing in a game */
+        static int trace = -1;
+        static u64 last;
+        if (trace < 0) trace = getenv("INKYPAINT_KBM_TRACE") && !strcmp(getenv("INKYPAINT_KBM_TRACE"), "1");
+        if (trace && out != last) LOG("kbm: buttons %016llx -> %016llx (in menu %d)\n", (unsigned long long)last,
+                                      (unsigned long long)out, in_menu);
+        last = out;
+    }
     return out;
 }
 
