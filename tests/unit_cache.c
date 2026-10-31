@@ -123,6 +123,82 @@ static int build(const char* folder, const char* output, SnxU64 limit) {
     return snx_build_module_llvm(&loaded, &options, &llvm);
 }
 
+/* A main and an sdk module, as a game's ExeFS lays them: main's f0 is a PLT stub into sdk (x17 = its GOT entry, br
+   x17), f1 adds 1; sdk's function adds 2, at sdk_base, in a module of sdk_size bytes (a mod's sdk of another size).
+   Units of 8 instructions would take main's two functions and sdk's first together */
+static int build_modules(const char* folder, const char* output, SnxU64 sdk_base, size_t sdk_size) {
+    static const SnxU32 main_code[] = {0x58004011u /* ldr x17, #0x800 */, 0xD61F0220u /* br x17 */,
+                                       0x91000400u /* add x0, x0, #1 */, 0xD65F03C0u};
+    static const SnxU32 sdk_code[] = {0x91000800u /* add x0, x0, #2 */, 0xD65F03C0u};
+    static unsigned char main_memory[TEXT_OFF + TEXT_SIZE], sdk_memory[TEXT_OFF + 4 * TEXT_SIZE];
+    static const SnxU64 main_functions[] = {TEXT_OFF, TEXT_OFF + 8}, sdk_functions[] = {TEXT_OFF};
+    SnxModuleImage images[2];
+    SnxProgram loaded = {0};
+    SnxCodegenOptions options = {0};
+    SnxLlvmBuild llvm = {0};
+    size_t i, j;
+    memset(images, 0, sizeof images);
+    memset(main_memory, 0, sizeof main_memory);
+    memset(sdk_memory, 0, sizeof sdk_memory);
+    for (i = 0; i < 4; ++i)
+        for (j = 0; j < 4; ++j) main_memory[TEXT_OFF + 4 * i + j] = (unsigned char)(main_code[i] >> (8 * j));
+    for (i = 0; i < 2; ++i)
+        for (j = 0; j < 4; ++j) sdk_memory[TEXT_OFF + 4 * i + j] = (unsigned char)(sdk_code[i] >> (8 * j));
+    for (j = 0; j < 8; ++j) /* the GOT entry rtld fills in: sdk's function */
+        main_memory[TEXT_OFF + 0x800 + j] = (unsigned char)((sdk_base + TEXT_OFF) >> (8 * j));
+    images[0].name = "main";
+    images[0].base = SNX_CODE_BASE;
+    images[0].size = sizeof main_memory;
+    images[0].image = main_memory;
+    images[0].image_size = sizeof main_memory;
+    images[0].text_off = TEXT_OFF;
+    images[0].text_size = TEXT_SIZE;
+    images[0].functions = (SnxU64*)main_functions;
+    images[0].function_count = 2;
+    images[1] = images[0];
+    images[1].name = "sdk";
+    images[1].base = sdk_base;
+    images[1].size = sdk_size;
+    images[1].image = sdk_memory;
+    images[1].image_size = sdk_size;
+    images[1].text_size = sdk_size - TEXT_OFF;
+    images[1].functions = (SnxU64*)sdk_functions;
+    images[1].function_count = 1;
+    loaded.modules = images;
+    loaded.module_count = 2;
+    loaded.npdm.title_id = 0x0100000000000000ull;
+    loaded.npdm.stack = 0x100000;
+    loaded.npdm.is64 = 1;
+    strcpy(loaded.npdm.name, "test");
+    options.title = "test";
+    options.abi = SNX_ABI;
+    options.quiet = 1;
+    options.chunk_instrs = 8;
+    llvm.output = output;
+    llvm.opt = '2';
+    llvm.jobs = 1;
+    llvm.quiet = 1;
+    llvm.unit_cache = folder;
+    llvm.wrappers = &g_unit_cache.wrappers;
+    return snx_build_module_llvm(&loaded, &options, &llvm);
+}
+
+static size_t objects(const char* folder, char f1[2][80]);
+
+/* sdk replaced by one at another base and of another size: main's unit, whose stub calls into sdk, is the same IR
+   and comes from the cache, and only sdk's unit is compiled */
+static void moved_sdk(const char* out_a, const char* out_b) {
+    const char* folder = "snx-test-unit-cache.m";
+    snx_remove_tree(folder);
+    CHECK(!build_modules(folder, out_a, SNX_CODE_BASE + 0x10000, TEXT_OFF + TEXT_SIZE));
+    if (objects(folder, NULL) != 2) fprintf(stderr, "%zu objects for main and sdk\n", objects(folder, NULL));
+    CHECK(objects(folder, NULL) == 2); /* main's unit and sdk's, not one across both */
+    CHECK(!build_modules(folder, out_b, SNX_CODE_BASE + 0x23000, TEXT_OFF + 3 * TEXT_SIZE));
+    if (objects(folder, NULL) != 3) fprintf(stderr, "%zu objects after sdk moved\n", objects(folder, NULL));
+    CHECK(objects(folder, NULL) == 3); /* sdk's new unit alone */
+    snx_remove_tree(folder);
+}
+
 static void undefined(CPU* c, u64 pc, u32 w) {
     (void)c;
     (void)pc;
@@ -382,6 +458,7 @@ int main(void) {
         snx_remove_tree(dirs[i]);
         CHECK(!snx_mkdirs(dirs[i]));
     }
+    moved_sdk(out[4], out[5]); /* neither loaded: the names stay free for the runs below */
 
     /* cold: both units compiled and kept */
     program(1);

@@ -489,23 +489,40 @@ static int by_cost(const void* a, const void* b) {
     if (x->cost != y->cost) return x->cost < y->cost ? 1 : -1;
     return x->unit < y->unit ? -1 : x->unit > y->unit; /* the same plan for the same code */
 }
+/* the module whose text holds address: its index in codegen->modules, module_count for none */
+static size_t module_of(const SnxCodegen* codegen, SnxU64 address) {
+    size_t i;
+    for (i = 0; i < codegen->module_count; ++i) {
+        const SnxCodeImage* m = &codegen->modules[i];
+        SnxU64 start = m->base + m->text_off;
+        if (address >= start && address - start < m->text_size) break;
+    }
+    return i;
+}
+
 /* Units of whole functions in their order, each about limit instructions, but for a function of more than big (0 for
    none) when the build optimizes past O1: alone, at O1. A handful of giant functions took a quarter of one game's
-   compile, single units of them up to four minutes at O2. The threads take the units the longest first, so the
-   slowest don't start last and leave every other thread waiting at the end (longest processing time first) */
+   compile, single units of them up to four minutes at O2. A unit ends where its first function's module does: a unit
+   holding the end of one module and the start of the next names the next's addresses, so replacing that module (a
+   mod's own sdk) would miss the unit cache for code of the first that did not change. The threads take the units the
+   longest first, so the slowest don't start last and leave every other thread waiting at the end (longest processing
+   time first) */
 static void unit_plan(Queue* q, const SnxCodegen* codegen, size_t limit, size_t big, char opt) {
     size_t first, last, count, i;
     UnitCost* costs;
     if (opt == '0' || opt == '1') big = 0;
     for (first = 0; first < codegen->function_count; first = last) {
         Unit* u = &q->units[q->count++];
+        size_t module = module_of(codegen, codegen->functions[first].start);
         last = first;
         count = 0;
         if (big && codegen->functions[first].count > big)
             last = first + 1;
         else
             do { count += codegen->functions[last++].count; } while (last < codegen->function_count && count < limit &&
-                                                                    !(big && codegen->functions[last].count > big));
+                                                                    !(big && codegen->functions[last].count > big) &&
+                                                                    module_of(codegen, codegen->functions[last].start) ==
+                                                                        module);
         u->first = first;
         u->last = last;
         u->opt = big && codegen->functions[first].count > big ? '1' : opt;

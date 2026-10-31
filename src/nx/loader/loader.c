@@ -1114,10 +1114,19 @@ static int load_modules(const SnxExefsReader* exefs, const char* where, SnxProgr
         free(path);
         if (failed) return -1;
         ++program->module_count;
-        if (m->size > end - cursor) return fail(error, error_size, snx_strdup("modules exceed guest address space"));
-        m->base = cursor;
-        cursor += m->size;
-        cursor = end - cursor >= GUARD_SIZE ? cursor + GUARD_SIZE : end;
+    }
+    /* rtld, main and sdk are laid in order, then the subsdk modules after them: a subsdk added by a mod then moves
+       nothing of the game's own, whose code calls into sdk by address, and the recompiled units of main stay as they were */
+    for (i = 0; i < 2; ++i) {
+        size_t n;
+        for (n = 0; n < program->module_count; ++n) {
+            SnxModuleImage* m = &program->modules[n];
+            if ((strncmp(m->name, "subsdk", 6) == 0) != (i == 1)) continue;
+            if (m->size > end - cursor) return fail(error, error_size, snx_strdup("modules exceed guest address space"));
+            m->base = cursor;
+            cursor += m->size;
+            cursor = end - cursor >= GUARD_SIZE ? cursor + GUARD_SIZE : end;
+        }
     }
     return 0;
 }
