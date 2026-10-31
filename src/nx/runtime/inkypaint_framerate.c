@@ -55,6 +55,10 @@
    pass 0. Every frame drawn advances the skeletal, material and visibility animations by it, extra frames too:
    at 100 frames a second they played 100/60 times too fast (2026-10-26, the shoal) */
 #define ANIM_ADVANCE 0xc68f330ull
+/* The per-model "needs its calculation" test of the model walker 0xc6945c0 (guard word `stp x29, x30, [sp, #-0x20]!`). The
+   walker takes the model's owner from [model+0x40] when the model has one animation set (u16 at +0x288 is 1) and
+   reads through it. */
+#define MODEL_READY 0xc687250ull
 #define JOB_SLOTS 2048
 static const u64 executors[] = {
     0xcda24e0, 0x9367870, 0xc7b56f0, 0xcda23a0, 0xcce1080, 0xcce119c, 0xccdd6d0,
@@ -89,7 +93,7 @@ static struct {
     GuestFn build_graph, module_calc, frame, calc, input_calc;
     GuestFn camera_view, scene_camera_view, render_camera_view, game_gfx_calc, gfx_visual_calc, scene_reset;
     GuestFn actor_schedule, actor_calc2, actor_after_calc2, actor_special_calc2;
-    GuestFn model_set_mtx, model_calc, anim_advance;
+    GuestFn model_set_mtx, model_calc, anim_advance, model_ready;
     GuestFn execute[sizeof executors / sizeof *executors];
     PMutex lock;
     FrameJob jobs[JOB_SLOTS];
@@ -329,6 +333,9 @@ static void inspect_graph(u64 graph, u64 caller) {
             if (g_framerate.allow[0] && (!strcmp(g_framerate.allow, ",*,") || strstr(g_framerate.allow, key)))
                 job->simulation = 0;
         }
+        /* jobs with no name are allowed as "unnamed" (or by "*"), for the bisection */
+        if (!job->name[0] && g_framerate.allow[0] && (strstr(g_framerate.allow, ",unnamed,") || !strcmp(g_framerate.allow, ",*,")))
+            job->simulation = 0;
         job->run = !job->simulation || g_framerate.simulating;
         job->sample = g_framerate.sample;
         job->frame = g_framerate.frame_serial;
@@ -750,6 +757,19 @@ static void render_camera_view(CPU* c, u64 entry) {
     g_framerate.render_camera_view(c, entry);
     c->x[31] = sp;
 }
+/* Playing online, the walker crashed on a model whose owner was null: a remote player's model not set up yet, or already
+   taken down, reached on a frame that is not a fixed step (never with smooth motion off). Such a model has nothing to
+   calculate, so it is answered as not ready: the walker counts it as skipped and goes on. The cause (which task leaves the
+   model in that state) is not found. */
+static void model_ready(CPU* c, u64 entry) {
+    u64 model = c->x[0];
+    if (model && readable(model, 0x28c) && (gr32(model + 0x288) & 0xffff) == 1 && gr64(model + 0x40) == 0) {
+        c->x[0] = 0;
+        c->pc = c->x[30];
+        return;
+    }
+    g_framerate.model_ready(c, entry);
+}
 static GuestFn hook(u64 a, GuestFn wrapper) {
     jit_code_changed(a, 4);
     GuestFn original = jit_wait(a);
@@ -872,7 +892,10 @@ void inkypaint_framerate_init(void) {
                 fatal("Could not install the actor phase hooks");
             LOG("framerate: native actor frame setup, with stateful actor callbacks fixed at 60 Hz\n");
         }
-        g_framerate.model_enabled = !getenv("INKYPAINT_MODEL_INTERP") || strcmp(getenv("INKYPAINT_MODEL_INTERP"), "0");
+        /* Off by default: with the models' world transform interpolated the player's hair trailed the head while moving
+           (the hair is simulated from the step's pose, not the interpolated one), and INKYPAINT_MODEL_INTERP=0 fixed it
+           every time it was tried. INKYPAINT_MODEL_INTERP=1 turns it on, characters then move smoothly at 120 */
+        g_framerate.model_enabled = getenv("INKYPAINT_MODEL_INTERP") && !strcmp(getenv("INKYPAINT_MODEL_INTERP"), "1");
         if (g_framerate.model_enabled) {
             if (gr32(MODEL_SET_MTX) != 0xd10183ff || gr32(MODEL_SET_MTX + 0x128) != 0x9711060f)
                 fatal("INKYPAINT_MODEL_INTERP: the model hook does not match this executable");
@@ -886,6 +909,10 @@ void inkypaint_framerate_init(void) {
             if (!g_framerate.model_set_mtx) fatal("Could not install the model transform hook");
             LOG("framerate: native model transforms interpolated between fixed steps\n");
         }
+        if (gr32(MODEL_READY) == 0xa9be7bfd) {
+            g_framerate.model_ready = hook(MODEL_READY, model_ready);
+            if (!g_framerate.model_ready) fatal("Could not install the model readiness hook");
+        } else WARN("framerate: the model readiness hook does not match this executable\n");
         g_framerate.anim_enabled = !getenv("INKYPAINT_ANIM_ADVANCE") || strcmp(getenv("INKYPAINT_ANIM_ADVANCE"), "0");
         if (g_framerate.anim_enabled) {
             if (gr32(ANIM_ADVANCE) != 0x39411008 || gr32(ANIM_ADVANCE + 0x34) != 0x1e200828)

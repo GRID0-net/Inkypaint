@@ -141,6 +141,14 @@ void Preparer::installDlc(const QString& file, const GameSources* sources, const
     retryDlc();
 }
 
+void Preparer::installDlcs(const QStringList& files, const GameSources* sources, const GamePaths& paths) {
+    if (running() || files.isEmpty()) return;
+    QStringList rest = files;
+    QString first = rest.takeFirst();
+    installDlc(first, sources, paths);
+    if (dlc_ && !extractArgs_.isEmpty()) dlcQueue_ = rest; // not when the first could not start
+}
+
 void Preparer::retryDlc() {
     if (running() || !dlc_ || extractArgs_.isEmpty()) return;
     cancelled_ = false;
@@ -183,6 +191,16 @@ void Preparer::run(const QStringList& args) {
             fail(last.isEmpty() ? QString("The runtime stopped with status %1.").arg(status) : last);
             return;
         }
+        if (dlc_ && !dlcQueue_.isEmpty()) {
+            int at = extractArgs_.indexOf("--install-dlc");
+            if (at >= 0 && at + 1 < extractArgs_.size()) {
+                extractArgs_[at + 1] = localPath(dlcQueue_.takeFirst());
+                detail_ = QString("Installing optional DLC; %1 more after this one").arg(dlcQueue_.size());
+                emit changed();
+                run(extractArgs_);
+                return;
+            }
+        }
         if (phase_ == "extracting") {
             extract_ = 1;
             phase_ = "recompiling";
@@ -216,6 +234,7 @@ void Preparer::reset() {
 }
 
 void Preparer::fail(const QString& why) {
+    dlcQueue_.clear();
     phase_ = "failed";
     failure_ = why;
     emit changed();

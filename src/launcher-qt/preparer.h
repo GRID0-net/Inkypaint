@@ -56,6 +56,8 @@ public:
 
     void start(const GameSources* sources, const GamePaths& paths);
     void installDlc(const QString& file, const GameSources* sources, const GamePaths& paths);
+    /// Several packages in turn: one install each, the next started when the one before has finished
+    void installDlcs(const QStringList& files, const GameSources* sources, const GamePaths& paths);
     Q_INVOKABLE void retryDlc();
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void reset();
@@ -81,6 +83,7 @@ private:
     QString partial_;
     bool cancelled_ = false;
     bool dlc_ = false;
+    QStringList dlcQueue_; // the packages still to install after the one running
     GamePaths paths_;
     QStringList extractArgs_;
 };

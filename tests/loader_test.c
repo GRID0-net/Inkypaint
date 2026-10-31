@@ -613,7 +613,8 @@ static void test_program(void) {
           (strstr(program.romfs_path, "RomFS") || strstr(program.romfs_path, "romfs")));
     for (i = 0; i < 4; i++) {
         CHECK(!strcmp(program.modules[i].name, names[i]));
-        CHECK(program.modules[i].base == SNX_CODE_BASE + i * 0x2000);
+        /* laid rtld, main, sdk, then the subsdk modules */
+        CHECK(program.modules[i].base == SNX_CODE_BASE + (SnxU64)(i == 2 ? 3 : i == 3 ? 2 : i) * 0x2000);
         expect_rich(&program.modules[i]);
     }
     snx_free_program(&program);
